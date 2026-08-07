@@ -49,18 +49,25 @@ const (
 // Offsets within an eye's ten-point block. Both eyes share the layout, so these
 // are added to LeftEyeFirst or RightEyeFirst.
 //
+// Named by position in the image, not anatomy. The block orders its points the
+// same way for both eyes — offset 2 is always the leftmost point and 6 the
+// rightmost — so "outer" and "inner" would name the same offset differently
+// depending on which eye it was applied to, which is exactly the sort of thing
+// that reads fine and computes the wrong answer half the time.
+//
 // The three upper-lid points sit directly above the three lower-lid ones, which
 // is what makes an aspect ratio meaningful: each pair measures the eye opening
 // at one horizontal position.
 const (
-	eyeLowerMid    = 0
-	eyeOuterCorner = 2
-	eyeLowerOuter  = 3
-	eyeLowerInner  = 4
-	eyeInnerCorner = 6
+	eyeLowerMid   = 0
+	eyeCornerLeft = 2
+	eyeLowerLeft  = 3
+	eyeLowerRight = 4
+
+	eyeCornerRight = 6
 	eyeUpperMid    = 7
-	eyeUpperOuter  = 8
-	eyeUpperInner  = 9
+	eyeUpperLeft   = 8
+	eyeUpperRight  = 9
 )
 
 // Offsets within the mouth's twenty-point block.
@@ -107,14 +114,14 @@ func (e Eye) first() int {
 func (l Landmarks106) EyeAspectRatio(e Eye) float64 {
 	base := e.first()
 
-	width := distance(l[base+eyeOuterCorner], l[base+eyeInnerCorner])
+	width := distance(l[base+eyeCornerLeft], l[base+eyeCornerRight])
 	if width <= 0 {
 		return 0
 	}
 
-	opening := distance(l[base+eyeUpperOuter], l[base+eyeLowerOuter]) +
+	opening := distance(l[base+eyeUpperLeft], l[base+eyeLowerLeft]) +
 		distance(l[base+eyeUpperMid], l[base+eyeLowerMid]) +
-		distance(l[base+eyeUpperInner], l[base+eyeLowerInner])
+		distance(l[base+eyeUpperRight], l[base+eyeLowerRight])
 
 	return opening / (3 * width)
 }
@@ -153,8 +160,8 @@ func (l Landmarks106) MouthAspectRatio() float64 {
 // where the detector said the eyes were.
 func (l Landmarks106) EyeCenter(e Eye) Point {
 	base := e.first()
-	a := l[base+eyeOuterCorner]
-	b := l[base+eyeInnerCorner]
+	a := l[base+eyeCornerLeft]
+	b := l[base+eyeCornerRight]
 	return Point{X: (a.X + b.X) / 2, Y: (a.Y + b.Y) / 2}
 }
 

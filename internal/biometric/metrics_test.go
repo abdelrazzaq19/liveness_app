@@ -51,16 +51,16 @@ func (f faceShape) build() Landmarks106 {
 		half := f.eyeOpening / 2
 		w := f.eyeWidth
 
-		l[base+eyeOuterCorner] = at(cx, cy)
-		l[base+eyeInnerCorner] = at(cx+w, cy)
+		l[base+eyeCornerLeft] = at(cx, cy)
+		l[base+eyeCornerRight] = at(cx+w, cy)
 
-		l[base+eyeUpperOuter] = at(cx+w*0.25, cy-half)
+		l[base+eyeUpperLeft] = at(cx+w*0.25, cy-half)
 		l[base+eyeUpperMid] = at(cx+w*0.50, cy-half)
-		l[base+eyeUpperInner] = at(cx+w*0.75, cy-half)
+		l[base+eyeUpperRight] = at(cx+w*0.75, cy-half)
 
-		l[base+eyeLowerOuter] = at(cx+w*0.25, cy+half)
+		l[base+eyeLowerLeft] = at(cx+w*0.25, cy+half)
 		l[base+eyeLowerMid] = at(cx+w*0.50, cy+half)
-		l[base+eyeLowerInner] = at(cx+w*0.75, cy+half)
+		l[base+eyeLowerRight] = at(cx+w*0.75, cy+half)
 
 		// The two centre points the model duplicates.
 		l[base+1] = at(cx+w*0.5, cy)
@@ -146,8 +146,8 @@ func TestEyeBlocksAreTheSameSize(t *testing.T) {
 
 	// Every offset the metrics use must fall inside the block.
 	for _, off := range []int{
-		eyeLowerMid, eyeOuterCorner, eyeLowerOuter, eyeLowerInner,
-		eyeInnerCorner, eyeUpperMid, eyeUpperOuter, eyeUpperInner,
+		eyeLowerMid, eyeCornerLeft, eyeLowerLeft, eyeLowerRight,
+		eyeCornerRight, eyeUpperMid, eyeUpperLeft, eyeUpperRight,
 	} {
 		if off < 0 || off > left {
 			t.Errorf("eye offset %d falls outside a block of %d points", off, left+1)
@@ -241,9 +241,9 @@ func TestMeanEyeAspectRatioAveragesBothEyes(t *testing.T) {
 	l := defaultShape().build()
 
 	// Close the right eye only, by collapsing its lids onto the eye line.
-	for _, off := range []int{eyeUpperOuter, eyeUpperMid, eyeUpperInner, eyeLowerOuter, eyeLowerMid, eyeLowerInner} {
+	for _, off := range []int{eyeUpperLeft, eyeUpperMid, eyeUpperRight, eyeLowerLeft, eyeLowerMid, eyeLowerRight} {
 		p := l[RightEyeFirst+off]
-		p.Y = l[RightEyeFirst+eyeOuterCorner].Y
+		p.Y = l[RightEyeFirst+eyeCornerLeft].Y
 		l[RightEyeFirst+off] = p
 	}
 
