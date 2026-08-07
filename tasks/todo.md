@@ -24,7 +24,70 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T8 bench CLI | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **Checkpoint 2** | — | ✅ **GATE LOLOS** — 2026-08-07 |
 | T9 landmark 106 + EAR/MAR | ✅ selesai | ✅ **lolos** — 2026-08-07 |
-| T10 head pose (PnP) | ⬜ berikutnya | — |
+| T10 head pose | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T11 anti-spoof | ⛔ **terblokir** Open Question #9 | — |
+| T12 embedder ArcFace | ⬜ berikutnya | — |
+
+### Bukti T10
+
+| Kriteria | Hasil |
+|---|---|
+| Yaw/pitch/roll dalam derajat dari 106 landmark | ✅ |
+| Rotasi sintetis dipulihkan | ✅ **±0,05°** — jauh di bawah syarat ±5° |
+| Rentang yaw −45°..+45° | ✅ langkah 5°, semuanya |
+| Pitch −30°..+30°, roll −40°..+40° | ✅ |
+| Rotasi gabungan | ✅ termasuk {40, 20, 20} dan {−40, −20, −20} |
+| Invarian skala dan posisi | ✅ skala 0,15× sampai 1,8× |
+| Konvensi tanda didokumentasikan **dan diuji** | ✅ yaw, pitch, roll masing-masing |
+| Landmark rusak → error, bukan sudut palsu | ✅ `ErrPoseUnavailable` |
+| Toleransi noise 2 px | ✅ yaw/roll ±3°, pitch ±8° |
+| Cakupan `internal/biometric` | **90,9%** |
+
+### Weak perspective, bukan PnP perspektif penuh
+
+Plan menyebut PnP. Saya pakai **scaled orthographic (weak perspective)** dan itu
+disengaja: solusi perspektif penuh menuntut focal length kamera, dan webcam
+sembarangan tidak melaporkannya. Mengarang nilainya juga aproksimasi — hanya
+yang tersembunyi. Pada jarak selfie, weak perspective berbiaya beberapa derajat
+dan tidak menuntut apa pun yang pemanggil tidak punya.
+
+Keuntungan lain: solusinya bentuk tertutup, jadi tidak ada iterasi yang bisa
+gagal konvergen di tengah sesi.
+
+### Dua bug nyata yang ditangkap test konvensi tanda
+
+**1. Nama konstanta sudut mata berbohong untuk mata kanan.** Offset `+2` selalu
+titik ber-x terkecil dan `+6` terbesar. Untuk mata kiri itu memang luar/dalam;
+untuk mata kanan justru terbalik. Nama `eyeOuterCorner` membaca dengan benar dan
+menghitung yang salah di separuh kasus. Diganti jadi `eyeCornerLeft`/
+`eyeCornerRight` — relatif gambar, benar untuk keduanya.
+
+**2. Model 3D berkonvensi kebalikan dari komentarnya sendiri.** Komentar menulis
+"z menjauhi kamera", tapi nilai model klasik yang disalin luas menulis kedalaman
+sebagai negatif — artinya sebaliknya, dan itu **membalik tanda setiap yaw**.
+Nilai Z dibalik supaya kode cocok dengan dokumentasinya.
+
+Keduanya jenis kesalahan yang tidak pernah memunculkan error: challenge "tengok
+kanan" akan diterima untuk tengok kiri, dan tidak ada yang tahu kecuali ada yang
+mengetesnya.
+
+### Pitch memang sumbu terlemah
+
+Dengan noise landmark 2 px: yaw dan roll meleset < 3°, pitch sampai 8°. Itu
+inheren, bukan kekurangan yang bisa disetel. Yaw dan roll dibaca dari lebar dan
+kemiringan wajah yang membentang ratusan piksel; pitch dibaca dari seberapa besar
+perbedaan kedalaman memendek, dan kedalaman itu hanya puluhan milimeter pada
+wajah yang nyaris rata dari sudut pandang kamera.
+
+Relevan untuk T17: challenge **NOD** (mengangguk, pakai pitch) akan lebih berisik
+daripada **TURN_LEFT/RIGHT** (pakai yaw). Ambangnya perlu lebih longgar.
+
+### Dependency di-pin karena Go 1.23
+
+`gonum` dan `x/image` versi terbaru menuntut Go 1.24/1.25. Keduanya di-pin ke
+versi kompatibel (`gonum@v0.15.1`, `x/image@v0.23.0`). Kalau pola ini berlanjut,
+menaikkan Go lebih murah daripada terus mem-pin — tapi itu perubahan SPEC §2 dan
+belum perlu sekarang.
 
 ### Bukti T8
 
