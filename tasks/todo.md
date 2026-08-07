@@ -20,7 +20,58 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T4 modelctl | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **T5 ⚠ ORT bootstrap** | ✅ selesai | ✅ **GATE LOLOS** — 2026-08-07 |
 | T6 detektor SCRFD | ✅ selesai | ✅ **lolos** — 2026-08-07 |
-| T7 imaging | ⬜ berikutnya | — |
+| T7 imaging | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T8 bench CLI | ⬜ berikutnya | — |
+
+### Bukti T7
+
+| Kriteria | Hasil |
+|---|---|
+| Decode JPEG/PNG | ✅ |
+| Batas byte **dan** batas piksel | ✅ batas piksel dicek dari header, sebelum satu piksel pun di-decode |
+| File rusak ditolak tanpa panic | ✅ + **fuzz 1,1 juta eksekusi, nol panic** |
+| Orientasi EXIF | ✅ kedelapan nilai dibaca, ditransformasi, dan diuji lewat posisi sudut |
+| Gerbang kualitas | ✅ blur, terlalu gelap, terlalu terang, wajah terlalu kecil — masing-masing dengan alasannya |
+| Variance Laplacian mengurutkan ketajaman | ✅ rata < gradien < papan catur |
+| Alignment similarity 5 titik | ✅ transform yang diketahui dipulihkan sampai 1e-9 |
+| Landmark mendarat di template | ✅ marker berwarna di kelima posisi template |
+| pHash 64-bit + jarak Hamming | ✅ noise < 5, rescale 2× < 8, adegan berbeda ≥ 10 |
+| Cakupan | **88,8%** |
+
+### Temuan T7
+
+**Dua kegagalan pertama adalah fixture test yang buruk, bukan bug implementasi.**
+Layak dicatat karena keduanya mudah salah didiagnosis:
+
+1. **pHash "gagal" invariansi brightness dengan jarak 32** — acak sempurna.
+   Penyebabnya gambar uji berupa gradien yang sudah mencapai 255, jadi `+20`
+   ter-clamp dan mengubah *struktur*, bukan levelnya. Selain itu gradien mulus
+   memang fixture pHash yang buruk: hampir seluruh energi DCT-nya menumpuk di
+   beberapa koefisien pertama, sisanya berkerumun di sekitar nol tempat noise
+   sekecil apa pun membalik banyak bit sekaligus. Diganti gambar bertekstur
+   dengan energi tersebar di banyak frekuensi, nilainya dijaga di [30, 190].
+
+2. **Marker alignment ter-blend jadi `{204 7 7}` alih-alih `{255 0 0}`.**
+   Transform-nya benar; bilinear memang mencampur tepi marker. Asersinya diganti
+   jadi "marker mana yang paling mirip", dibandingkan lewat **arah** vektor RGB
+   ternormalisasi, bukan jarak Euclidean — magenta redup lebih dekat ke merah
+   terang secara jarak, tapi arahnya tetap menunjuk magenta.
+
+**Parser EXIF ditulis sendiri, bukan menambah dependency.** Cakupannya sengaja
+sempit: berjalan ke IFD0, mencari satu tag, menyerah pada apa pun yang tidak
+dikenali. Library EXIF penuh berarti satu dependency dan permukaan serang jauh
+lebih besar untuk satu nilai 16-bit. Input rusak apa pun menghasilkan
+`OrientationNormal`, yang juga jawaban benar untuk file tanpa EXIF.
+
+**Alignment memakai similarity 4 parameter, bukan affine 6.** Crop wajah tidak
+boleh di-*shear* atau diregangkan berbeda per sumbu: itu mengubah geometri yang
+justru diukur model embedding.
+
+### Deviasi T7
+
+`exif.go` dipisah dari `decode.go` (plan menyebut 5 file, jadi 6). Parser EXIF
+adalah format tersendiri dengan urusannya sendiri, dan menggabungkannya membuat
+`decode.go` dua kali lebih panjang tanpa alasan.
 
 ### Bukti T6
 
