@@ -29,7 +29,45 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T12 embedder ArcFace | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T13 pipeline + stub | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **Checkpoint 3** | — | ✅ **LOLOS** — 2026-08-07 |
+| T16 sesi + state machine | ✅ selesai | ✅ **lolos** — cakupan 86,4% |
+| T17 evaluator challenge | ✅ selesai | ✅ **lolos** — cakupan 91,4% |
+| T18 anti-replay | ✅ selesai | ✅ **lolos** — cakupan 93,6% |
+| T19 liveness.Service | ✅ selesai | ✅ **lolos** — cakupan 89,9%, sesi end-to-end |
 | T14 Postgres + migrasi | ⬜ berikutnya | — |
+| T15 session repository | ⬜ | — |
+| T20 handler HTTP | ⬜ | — |
+| T21 demo web UI | ⬜ | — |
+
+### Koreksi terhadap SPEC §5: dedup pHash tidak boleh mematikan sesi
+
+SPEC menulis "dua frame dengan Hamming distance pHash < 5 dianggap frame yang
+sama (indikasi replay statis)". Kalau itu diperlakukan sebagai kegagalan sesi,
+**subjek hidup yang duduk diam akan ditolak** — ia menghasilkan frame nyaris
+identik juga.
+
+Yang membedakan orang dari foto adalah orang **akhirnya bergerak**, dan
+challenge-lah yang memastikan itu. Jadi:
+
+- Satu frame duplikat → **recoverable**, minta frame berikutnya
+- Rentetan panjang (`MaxDuplicateStreak`) → **fatal**, `ErrStaticReplay`
+
+### Temuan T17/T19 yang jadi syarat untuk T21
+
+**Challenge menoleh dan mengangguk menangkap baseline dari frame pertamanya.**
+Gerakan diukur dari pose saat instruksi muncul, bukan sudut mutlak — subjek yang
+kebetulan duduk menyerong tetap harus menoleh.
+
+Konsekuensinya untuk demo UI: **instruksi harus muncul lebih dulu dan subjek
+diberi waktu diam sebentar sebelum bergerak.** Kalau frame pertama challenge
+sudah menoleh, itulah yang jadi baseline dan delta-nya nol selamanya.
+
+Test end-to-end menangkap ini — 60 iterasi tanpa maju sama sekali.
+
+### Konvensi tanda yang harus diterjemahkan UI
+
+`ChallengeTurnLeft` berarti wajah menoleh ke **kiri gambar** (yaw mengecil).
+Preview webcam biasanya dicerminkan, jadi teks instruksi untuk subjek harus
+dibalik. Itu keputusan T21, bukan domain.
 
 ### Bukti T12
 
