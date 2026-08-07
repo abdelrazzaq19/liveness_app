@@ -79,11 +79,20 @@ func verify(m *Manifest, dir string, out io.Writer) error {
 	return errors.Join(problems...)
 }
 
-// pin downloads every artifact and records the digests it observes, so that a
+// pin downloads artifacts and records the digests it observes, so that a
 // manifest written without known-good hashes can bootstrap itself.
-func pin(ctx context.Context, m *Manifest, dir string, client *http.Client, out io.Writer) error {
+//
+// Artifacts that are already pinned and present are skipped unless force is
+// set. Adding one entry to the manifest should not mean re-downloading every
+// other one.
+func pin(ctx context.Context, m *Manifest, dir string, client *http.Client, out io.Writer, force bool) error {
 	for i := range m.Artifacts {
 		a := m.Artifacts[i]
+
+		if !force && a.SHA256 != "" && satisfied(a, dir) {
+			fmt.Fprintf(out, "ok       %s (already pinned)\n", a.Name)
+			continue
+		}
 
 		fmt.Fprintf(out, "fetching %s\n         %s\n", a.Name, a.URL)
 		obs, err := fetchArtifact(ctx, a, dir, client, false)

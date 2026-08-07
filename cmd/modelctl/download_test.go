@@ -288,7 +288,7 @@ func TestPinRecordsObservedDigests(t *testing.T) {
 		Extract: []Member{{Path: "det_10g.onnx", As: "det_10g.onnx"}},
 	}}}
 
-	if err := pin(context.Background(), m, dir, srv.Client(), io.Discard); err != nil {
+	if err := pin(context.Background(), m, dir, srv.Client(), io.Discard, false); err != nil {
 		t.Fatalf("pin() returned an unexpected error: %v", err)
 	}
 
@@ -305,6 +305,49 @@ func TestPinRecordsObservedDigests(t *testing.T) {
 	// The pinned manifest must now satisfy an ordinary verify.
 	if err := verify(m, dir, io.Discard); err != nil {
 		t.Errorf("verify() failed on a freshly pinned manifest: %v", err)
+	}
+}
+
+// Adding one entry to the manifest must not mean re-downloading every other
+// one; the packs here are hundreds of megabytes each.
+func TestPinSkipsArtifactsAlreadyPinned(t *testing.T) {
+	body := []byte("weights")
+	srv, hits := serveBlobs(t, map[string][]byte{"/m.onnx": body})
+
+	dir := t.TempDir()
+	m := &Manifest{Version: 1, Artifacts: []Artifact{{
+		Name: "m", URL: srv.URL + "/m.onnx", As: "m.onnx", License: "test",
+	}}}
+
+	for i := 1; i <= 3; i++ {
+		if err := pin(context.Background(), m, dir, srv.Client(), io.Discard, false); err != nil {
+			t.Fatalf("pin() run %d returned an unexpected error: %v", i, err)
+		}
+	}
+
+	if got := hits.Load(); got != 1 {
+		t.Errorf("server received %d requests across three pins, want 1", got)
+	}
+}
+
+// Forcing is how a manifest is refreshed when upstream replaces a release.
+func TestPinForceRefetchesEverything(t *testing.T) {
+	body := []byte("weights")
+	srv, hits := serveBlobs(t, map[string][]byte{"/m.onnx": body})
+
+	dir := t.TempDir()
+	m := &Manifest{Version: 1, Artifacts: []Artifact{{
+		Name: "m", URL: srv.URL + "/m.onnx", As: "m.onnx", License: "test",
+	}}}
+
+	for i := 1; i <= 2; i++ {
+		if err := pin(context.Background(), m, dir, srv.Client(), io.Discard, true); err != nil {
+			t.Fatalf("pin() run %d returned an unexpected error: %v", i, err)
+		}
+	}
+
+	if got := hits.Load(); got != 2 {
+		t.Errorf("server received %d requests across two forced pins, want 2", got)
 	}
 }
 

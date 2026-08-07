@@ -26,6 +26,22 @@
           "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
         }
       ]
+    },
+    {
+      "name": "buffalo_s",
+      "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip",
+      "sha256": "d85a87f503f691807cd8bb97128bdf7a0660326cd9cd02657127fa978bab8b5e",
+      "size_bytes": 127607557,
+      "license": "InsightFace pre-trained models - non-commercial research use only",
+      "license_url": "https://github.com/deepinsight/insightface/tree/master/model_zoo",
+      "notes": "Only det_500m.onnx is taken. det_10g needs 127 ms per frame even at 320x320, which leaves nothing of the 150 ms budget for the other three models; SCRFD-500M is roughly 20x lighter. The pack's other files duplicate buffalo_l's or are lower quality, so they are left in the archive.",
+      "extract": [
+        {
+          "path": "det_500m.onnx",
+          "as": "det_500m.onnx",
+          "sha256": "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a"
+        }
+      ]
     }
   ]
 }

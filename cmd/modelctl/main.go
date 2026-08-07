@@ -40,6 +40,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	manifestPath := fs.String("manifest", "models/manifest.json", "path to the manifest file")
 	dir := fs.String("dir", "models", "directory the model files live in")
 	timeout := fs.Duration("timeout", 30*time.Minute, "overall timeout for network work")
+	force := fs.Bool("force", false, "pin: re-download and re-record artifacts that are already pinned")
 
 	fs.Usage = func() {
 		fmt.Fprint(errOut, "usage: modelctl [flags] <download|verify|pin>\n\n"+
@@ -78,7 +79,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return verify(m, *dir, out)
 
 	case "pin":
-		if err := pin(ctx, m, *dir, client, out); err != nil {
+		if err := pin(ctx, m, *dir, client, out, *force); err != nil {
 			return err
 		}
 		if err := saveManifest(*manifestPath, m); err != nil {
