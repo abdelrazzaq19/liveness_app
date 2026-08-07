@@ -205,6 +205,30 @@ func (s *Session) Remaining() int {
 // AllComplete reports whether every challenge has been satisfied.
 func (s *Session) AllComplete() bool { return s.Current >= len(s.Challenges) }
 
+// SecondsRemaining is how long the subject has left on the active challenge.
+//
+// It is the earlier of the two deadlines, because either one ending stops the
+// session: a countdown that showed the challenge's twelve seconds while the
+// session had three left would be a lie the subject only discovers at zero.
+//
+// Never negative, and zero once the session is over.
+func (s *Session) SecondsRemaining(now time.Time) float64 {
+	if s.State.Terminal() || s.AllComplete() {
+		return 0
+	}
+
+	deadline := s.ChallengeDeadline
+	if s.ExpiresAt.Before(deadline) {
+		deadline = s.ExpiresAt
+	}
+
+	left := deadline.Sub(now).Seconds()
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
 // Expired reports whether the session or its current challenge has run out of
 // time.
 func (s *Session) Expired(now time.Time) bool {

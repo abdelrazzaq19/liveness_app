@@ -589,6 +589,96 @@ func TestOnlyKeyFramesAreEmbedded(t *testing.T) {
 	}
 }
 
+// Every frame carries the countdown, because the client interpolates between
+// responses and a gap would leave it guessing.
+func TestEveryFrameResultCarriesTheCountdown(t *testing.T) {
+	h := newHarness(t, nil)
+	h.analyzer.faces = []biometric.Face{{EAR: 0.40, LivenessScore: 0.95}}
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	got, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0xA1)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if got.SecondsRemaining != 20 {
+		t.Errorf("seconds remaining = %g at the start, want the full 20", got.SecondsRemaining)
+	}
+
+	h.clock.Advance(6 * time.Second)
+
+	got, err = h.sendFrame(t, s.ID, 2, s.Nonce, 0xB2)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if got.SecondsRemaining != 14 {
+		t.Errorf("seconds remaining = %g after six seconds, want 14", got.SecondsRemaining)
+	}
+}
+
+// A frame the pipeline could not use still has to report the countdown: the
+// clock keeps running while the subject fixes their lighting.
+func TestUnusableFramesStillCarryTheCountdown(t *testing.T) {
+	h := newHarness(t, nil)
+	h.analyzer.errs = []error{biometric.ErrLowQuality}
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	h.clock.Advance(3 * time.Second)
+
+	got, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0xC3)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if got.SecondsRemaining != 17 {
+		t.Errorf("seconds remaining = %g, want 17", got.SecondsRemaining)
+	}
+	if got.Reason == "" {
+		t.Error("an unusable frame gave no reason")
+	}
+}
+
+// Advancing must report the new challenge's countdown, not the finished one's.
+func TestAdvancingReportsTheNextChallengesCountdown(t *testing.T) {
+	h := newHarness(t, nil)
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	// Satisfy whichever challenge came first.
+	satisfying := biometric.Face{EAR: 0.40, MAR: 0.90, LivenessScore: 0.95}
+	satisfying.Pose.Yaw = 40
+	satisfying.Pose.Pitch = 25
+
+	h.analyzer.faces = []biometric.Face{{EAR: 0.10, LivenessScore: 0.95}}
+	_, _ = h.sendFrame(t, s.ID, 1, s.Nonce, 0xD1)
+	_, _ = h.sendFrame(t, s.ID, 2, s.Nonce, 0xD2)
+
+	h.clock.Advance(9 * time.Second)
+
+	h.analyzer.faces = []biometric.Face{satisfying}
+	h.analyzer.calls = 0
+
+	got, err := h.sendFrame(t, s.ID, 3, s.Nonce, 0xD3)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if !got.Advanced {
+		t.Skip("the drawn challenge was not satisfied by this frame")
+	}
+	if got.SecondsRemaining != 20 {
+		t.Errorf("seconds remaining = %g after advancing, want a fresh 20", got.SecondsRemaining)
+	}
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 

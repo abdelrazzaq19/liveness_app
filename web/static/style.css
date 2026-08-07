@@ -52,6 +52,47 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-si
    image-relative and never mirrored. */
 video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 
+/* The countdown, over the video where the subject is already looking. */
+.timer {
+  position: absolute;
+  top: .75rem;
+  right: .75rem;
+  width: 3.4rem;
+  height: 3.4rem;
+  display: grid;
+  place-items: center;
+}
+.timer svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.timer circle { fill: none; stroke-width: 3.5; }
+.timer .track { stroke: #ffffff26; }
+.timer .arc {
+  stroke: var(--ok);
+  stroke-linecap: round;
+  /* 2 * pi * r, r = 19 */
+  stroke-dasharray: 119.38;
+  transition: stroke-dashoffset .12s linear, stroke .3s;
+}
+.timer span {
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 1.25rem;
+  text-shadow: 0 1px 3px #000a;
+}
+.timer.warn .arc { stroke: var(--warn); }
+.timer.warn span { color: var(--warn); }
+.timer.critical .arc { stroke: var(--bad); }
+.timer.critical span { color: var(--bad); }
+/* A pulse only in the last seconds: constant motion stops being a signal. */
+.timer.critical { animation: pulse .7s ease-in-out infinite; }
+
+@keyframes pulse { 50% { transform: scale(1.12); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .timer.critical { animation: none; }
+  .timer .arc { transition: none; }
+}
+
 .badge {
   position: absolute;
   inset: auto 0 0 0;
@@ -90,6 +131,17 @@ video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .steps li.active::before { content: "●"; color: var(--accent); }
 .steps li.done { color: var(--ok); }
 .steps li.done::before { content: "✓"; }
+
+/* The allowance per step, shown from the start rather than appearing as a
+   countdown once the subject is already behind. */
+.steps .allowance {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-size: .8rem;
+  opacity: .8;
+}
+.steps li.active .allowance { color: var(--accent); opacity: 1; font-weight: 600; }
+.steps li.done .allowance { opacity: .55; }
 
 .controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
 .field { display: flex; flex-direction: column; gap: .25rem; flex: 1 1 14rem; }

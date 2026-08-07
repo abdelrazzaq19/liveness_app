@@ -236,6 +236,77 @@ func TestExpiry(t *testing.T) {
 	}
 }
 
+// The countdown the subject watches. It has to be the earlier of the two
+// deadlines: showing a challenge's ten seconds while the session had three left
+// would be a lie they only discover at zero.
+func TestSecondsRemaining(t *testing.T) {
+	tests := []struct {
+		name string
+		at   time.Time
+		want float64
+	}{
+		{"at the start", testStart, 20},
+		{"part way through", testStart.Add(7 * time.Second), 13},
+		{"exactly at the deadline", testStart.Add(20 * time.Second), 0},
+		{"past it, never negative", testStart.Add(45 * time.Second), 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestSession(t, 3)
+			_ = s.Begin(testStart)
+
+			if got := s.SecondsRemaining(tt.at); got != tt.want {
+				t.Errorf("SecondsRemaining() = %g, want %g", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSecondsRemainingUsesTheEarlierDeadline(t *testing.T) {
+	s := newTestSession(t, 3)
+	_ = s.Begin(testStart)
+
+	// A session about to end while the challenge still has plenty of time.
+	s.ExpiresAt = testStart.Add(4 * time.Second)
+
+	if got := s.SecondsRemaining(testStart); got != 4 {
+		t.Errorf("SecondsRemaining() = %g, want the session's 4 rather than the challenge's 20", got)
+	}
+}
+
+// A finished session has no countdown, and a client that kept showing one would
+// be inviting the subject to keep trying.
+func TestSecondsRemainingIsZeroOnceTheSessionEnds(t *testing.T) {
+	for _, state := range []State{StatePassed, StateFailed, StateExpired} {
+		t.Run(string(state), func(t *testing.T) {
+			s := newTestSession(t, 3)
+			s.State = state
+
+			if got := s.SecondsRemaining(testStart); got != 0 {
+				t.Errorf("SecondsRemaining() = %g on a %s session, want 0", got, state)
+			}
+		})
+	}
+}
+
+func TestAdvanceRestartsTheCountdown(t *testing.T) {
+	s := newTestSession(t, 3)
+	_ = s.Begin(testStart)
+
+	at := testStart.Add(8 * time.Second)
+	if got := s.SecondsRemaining(at); got != 12 {
+		t.Fatalf("SecondsRemaining() = %g before advancing, want 12", got)
+	}
+
+	if err := s.Advance(at, 20*time.Second); err != nil {
+		t.Fatalf("Advance() returned an unexpected error: %v", err)
+	}
+	if got := s.SecondsRemaining(at); got != 20 {
+		t.Errorf("SecondsRemaining() = %g after advancing, want a full 20", got)
+	}
+}
+
 // A finished session must not keep expiring: the challenge deadline is long
 // past by the time anyone looks at a completed record.
 func TestCompletedSessionDoesNotExpire(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -56,7 +57,7 @@ func (h *livenessHandler) start(w http.ResponseWriter, r *http.Request) {
 			"could not start a verification session", err))
 		return
 	}
-	writeJSON(w, h.log, http.StatusCreated, newStartSessionResponse(session))
+	writeJSON(w, h.log, http.StatusCreated, newStartSessionResponse(session, time.Now()))
 }
 
 func (h *livenessHandler) status(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +66,7 @@ func (h *livenessHandler) status(w http.ResponseWriter, r *http.Request) {
 		respond(w, r, h.log, mapLivenessError(err))
 		return
 	}
-	writeJSON(w, h.log, http.StatusOK, newSessionStatusResponse(session))
+	writeJSON(w, h.log, http.StatusOK, newSessionStatusResponse(session, time.Now()))
 }
 
 func (h *livenessHandler) complete(w http.ResponseWriter, r *http.Request) {

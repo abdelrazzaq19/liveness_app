@@ -168,9 +168,29 @@ type FrameResult struct {
 	Completed bool          `json:"completed"`
 	Remaining int           `json:"remaining"`
 
+	// SecondsRemaining is how long is left on the current challenge.
+	//
+	// Sent as a duration rather than as a deadline on purpose. A client with a
+	// skewed clock would render an absolute deadline wrongly and either rush
+	// the subject or let them run out without warning; a countdown it merely
+	// interpolates between responses cannot drift far, because another one
+	// arrives several times a second.
+	SecondsRemaining float64 `json:"seconds_remaining"`
+
 	// Reason tells the subject what the frame was missing. It is empty when the
 	// frame advanced the session.
 	Reason string `json:"reason,omitempty"`
+}
+
+// progressResult builds the part of a result that describes where the session
+// stands, so every return path reports the same thing.
+func (s *Service) progressResult(session *Session, now time.Time) FrameResult {
+	return FrameResult{
+		State:            session.State,
+		Challenge:        session.ActiveChallenge(),
+		Remaining:        session.Remaining(),
+		SecondsRemaining: session.SecondsRemaining(now),
+	}
 }
 
 // SubmitFrame evaluates one frame against the active challenge.
@@ -218,12 +238,10 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		// Unusable frame: record it so the sequence number is consumed, then
 		// ask for another.
 		s.deps.Guard.Record(session, frame, biometric.Face{})
-		return s.save(ctx, session, FrameResult{
-			State:     session.State,
-			Challenge: session.ActiveChallenge(),
-			Remaining: session.Remaining(),
-			Reason:    analysisReason(analyzeErr),
-		})
+
+		result := s.progressResult(session, now)
+		result.Reason = analysisReason(analyzeErr)
+		return s.save(ctx, session, result)
 	}
 
 	if err := s.deps.Guard.CheckAnalysis(session, frame, face); err != nil {
@@ -231,36 +249,30 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 			return s.endSession(ctx, session, now, failSession, err.Error())
 		}
 		s.deps.Guard.Record(session, frame, face)
-		return s.save(ctx, session, FrameResult{
-			State:     session.State,
-			Challenge: session.ActiveChallenge(),
-			Remaining: session.Remaining(),
-			Reason:    "hold still for a moment, then follow the instruction",
-		})
+
+		result := s.progressResult(session, now)
+		result.Reason = "hold still for a moment, then follow the instruction"
+		return s.save(ctx, session, result)
 	}
 
 	outcome := s.deps.Evaluator.Evaluate(session, face)
 	s.deps.Guard.Record(session, frame, face)
 
-	result := FrameResult{
-		State:     session.State,
-		Challenge: session.ActiveChallenge(),
-		Remaining: session.Remaining(),
-		Reason:    outcome.Reason,
-	}
-
 	if outcome.Satisfied {
 		if err := session.Advance(now, s.deps.Config.ChallengeTimeout); err != nil {
 			return FrameResult{}, err
 		}
+
+		// Rebuilt after advancing, so the countdown the client shows is the new
+		// challenge's rather than the one just finished.
+		result := s.progressResult(session, now)
 		result.Advanced = true
-		result.Reason = ""
-		result.Challenge = session.ActiveChallenge()
-		result.Remaining = session.Remaining()
 		result.Completed = session.AllComplete()
-		result.State = session.State
+		return s.save(ctx, session, result)
 	}
 
+	result := s.progressResult(session, now)
+	result.Reason = outcome.Reason
 	return s.save(ctx, session, result)
 }
 

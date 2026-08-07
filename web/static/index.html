@@ -19,6 +19,17 @@
            instruction text compensates for it; see app.js. -->
       <video id="preview" autoplay playsinline muted></video>
       <canvas id="capture" hidden></canvas>
+
+      <!-- The countdown sits over the video because that is where the subject
+           is already looking. A timer in a side panel is a timer nobody sees. -->
+      <div id="timer" class="timer" hidden>
+        <svg viewBox="0 0 44 44" aria-hidden="true">
+          <circle class="track" cx="22" cy="22" r="19"></circle>
+          <circle id="timerArc" class="arc" cx="22" cy="22" r="19"></circle>
+        </svg>
+        <span id="timerText">10</span>
+      </div>
+
       <div id="badge" class="badge" hidden></div>
     </div>
 

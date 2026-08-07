@@ -9,6 +9,9 @@ const els = {
   video: document.getElementById('preview'),
   canvas: document.getElementById('capture'),
   badge: document.getElementById('badge'),
+  timer: document.getElementById('timer'),
+  timerArc: document.getElementById('timerArc'),
+  timerText: document.getElementById('timerText'),
   instruction: document.getElementById('instruction'),
   hint: document.getElementById('hint'),
   steps: document.getElementById('steps'),
@@ -39,15 +42,30 @@ const FRAME_INTERVAL_MS = 160;
 // who has already started moving would be measured against their own turn.
 const SETTLE_MS = 700;
 
+// The countdown redraws far more often than frames arrive, so the number moves
+// smoothly instead of stepping six times a second.
+const TICK_MS = 100;
+
+// Circumference of the progress ring: 2 * pi * 19, matching the SVG.
+const ARC_LENGTH = 119.38;
+
 const state = {
   session: null,
   seq: 0,
   stream: null,
   timer: null,
+  ticker: null,
   inFlight: false,
   currentChallenge: null,
   settleUntil: 0,
   done: new Set(),
+
+  // The countdown is interpolated between server responses. Storing when the
+  // last figure arrived is what lets it run down smoothly without the client
+  // ever deciding for itself how much time is left.
+  secondsAtSync: 0,
+  syncedAt: 0,
+  challengeSeconds: 0,
 };
 
 function setStatus(text, kind) {
@@ -62,20 +80,68 @@ function setBadge(text, kind) {
   els.badge.className = 'badge' + (kind ? ' ' + kind : '');
 }
 
+function formatSeconds(s) {
+  return String(Math.max(0, Math.ceil(s)));
+}
+
 function renderSteps() {
   els.steps.replaceChildren();
   if (!state.session) return;
 
+  const allowance = state.challengeSeconds ? `${Math.round(state.challengeSeconds)} dtk` : '';
+
   for (const kind of state.session.challenges) {
     const li = document.createElement('li');
-    li.textContent = (INSTRUCTIONS[kind] || { text: kind }).text;
+
+    const label = document.createElement('span');
+    label.textContent = (INSTRUCTIONS[kind] || { text: kind }).text;
+    li.append(label);
+
+    if (allowance) {
+      const time = document.createElement('span');
+      time.className = 'allowance';
+      time.textContent = allowance;
+      li.append(time);
+    }
+
     if (state.done.has(kind)) li.classList.add('done');
     else if (kind === state.currentChallenge) li.classList.add('active');
+
     els.steps.append(li);
   }
 }
 
-function showChallenge(kind) {
+// remainingSeconds interpolates from the last figure the server sent.
+function remainingSeconds() {
+  if (!state.syncedAt) return 0;
+  const elapsed = (performance.now() - state.syncedAt) / 1000;
+  return Math.max(0, state.secondsAtSync - elapsed);
+}
+
+function syncCountdown(seconds) {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return;
+  state.secondsAtSync = seconds;
+  state.syncedAt = performance.now();
+}
+
+function drawCountdown() {
+  if (!state.session || !state.challengeSeconds) {
+    els.timer.hidden = true;
+    return;
+  }
+
+  const left = remainingSeconds();
+  els.timer.hidden = false;
+  els.timerText.textContent = formatSeconds(left);
+
+  const fraction = Math.min(1, Math.max(0, left / state.challengeSeconds));
+  els.timerArc.style.strokeDashoffset = String(ARC_LENGTH * (1 - fraction));
+
+  els.timer.classList.toggle('warn', left <= 5 && left > 3);
+  els.timer.classList.toggle('critical', left <= 3);
+}
+
+function showChallenge(kind, seconds) {
   if (kind && kind !== state.currentChallenge) {
     if (state.currentChallenge) state.done.add(state.currentChallenge);
     state.currentChallenge = kind;
@@ -84,10 +150,13 @@ function showChallenge(kind) {
     state.settleUntil = performance.now() + SETTLE_MS;
   }
 
+  syncCountdown(seconds);
+
   const copy = INSTRUCTIONS[kind] || { text: kind || '', hint: '' };
   els.instruction.textContent = copy.text;
   els.hint.textContent = copy.hint;
   renderSteps();
+  drawCountdown();
 }
 
 async function api(path, options = {}) {
@@ -158,15 +227,22 @@ async function sendFrame() {
       await finish();
       return;
     }
-    if (res.challenge) showChallenge(res.challenge);
+
+    if (res.challenge) showChallenge(res.challenge, res.seconds_remaining);
+    else syncCountdown(res.seconds_remaining);
 
     if (res.advanced) setStatus('Bagus.', 'ok');
     else if (res.reason) setStatus(res.reason);
     else setStatus('');
   } catch (err) {
-    // 422 is a verification failure; anything else is a problem with the
-    // request or the service.
-    if (err.status === 422 || err.status === 410) {
+    // 410 is a deadline that ran out; 422 is a verification failure.
+    if (err.status === 410) {
+      stop();
+      setBadge('WAKTU HABIS', 'bad');
+      setStatus('Waktu untuk langkah ini habis. Mulai lagi dari awal.', 'bad');
+      return;
+    }
+    if (err.status === 422) {
       stop();
       setBadge('GAGAL', 'bad');
       setStatus(err.message, 'bad');
@@ -205,6 +281,9 @@ async function finish() {
 
 function stopCapture() {
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  if (state.ticker) { clearInterval(state.ticker); state.ticker = null; }
+  els.timer.hidden = true;
+  els.timer.classList.remove('warn', 'critical');
 }
 
 function stop() {
@@ -239,7 +318,7 @@ async function start() {
     if (err.name === 'NotAllowedError') {
       setStatus('Akses kamera ditolak. Izinkan lewat ikon di bilah alamat, lalu coba lagi.', 'bad');
     } else if (!window.isSecureContext) {
-      setStatus('Kamera hanya bisa diakses lewat localhost atau HTTPS. Buka http://localhost:8080/demo.', 'bad');
+      setStatus('Kamera hanya bisa diakses lewat localhost atau HTTPS. Buka http://localhost:8080/demo/.', 'bad');
     } else {
       setStatus(`Kamera tidak tersedia: ${err.message}`, 'bad');
     }
@@ -261,7 +340,9 @@ async function start() {
   state.seq = 0;
   state.done = new Set();
   state.currentChallenge = null;
-  showChallenge(state.session.challenges[0]);
+  state.challengeSeconds = state.session.challenge_seconds || 0;
+
+  showChallenge(state.session.challenges[0], state.session.seconds_remaining);
 
   els.start.hidden = true;
   els.stop.hidden = false;
@@ -269,6 +350,7 @@ async function start() {
   setStatus('Ikuti instruksi.');
 
   state.timer = setInterval(sendFrame, FRAME_INTERVAL_MS);
+  state.ticker = setInterval(drawCountdown, TICK_MS);
 }
 
 els.start.addEventListener('click', start);
@@ -286,5 +368,5 @@ fetch('/healthz')
   .catch(() => { els.mode.textContent = 'tidak dapat dihubungi'; });
 
 if (!window.isSecureContext) {
-  setStatus('Halaman ini bukan secure context; kamera tidak akan bisa diakses. Gunakan http://localhost:8080/demo.', 'warn');
+  setStatus('Halaman ini bukan secure context; kamera tidak akan bisa diakses. Gunakan http://localhost:8080/demo/.', 'warn');
 }

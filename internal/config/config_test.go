@@ -61,6 +61,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		{"Imaging.MinFaceWidthPx", cfg.Imaging.MinFaceWidthPx, 112},
 		{"Imaging.PHashMinDistance", cfg.Imaging.PHashMinDistance, 5},
 		{"Liveness.SessionTTL", cfg.Liveness.SessionTTL, 90 * time.Second},
+		{"Liveness.ChallengeTimeout", cfg.Liveness.ChallengeTimeout, 10 * time.Second},
 		{"Liveness.ChallengeCount", cfg.Liveness.ChallengeCount, 3},
 		{"Liveness.EARBlink", cfg.Liveness.EARBlink, 0.21},
 		{"Liveness.IdentityCosineMin", cfg.Liveness.IdentityCosineMin, 0.70},

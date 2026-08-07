@@ -130,6 +130,49 @@ func TestStartSession(t *testing.T) {
 	}
 }
 
+// The client shows the subject how long each step allows before they start, so
+// both figures have to be on the response that opens the session.
+func TestStartSessionCarriesTheTiming(t *testing.T) {
+	fake := &fakeLiveness{session: newFakeSession(t)}
+	rec := do(livenessRouter(t, fake), authed(http.MethodPost, "/v1/liveness/sessions", nil))
+
+	var got startSessionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not valid JSON: %v", err)
+	}
+
+	if got.ChallengeSeconds <= 0 {
+		t.Errorf("challenge_seconds = %g, want the per-step allowance", got.ChallengeSeconds)
+	}
+	if got.SecondsRemaining <= 0 || got.SecondsRemaining > got.ChallengeSeconds+1 {
+		t.Errorf("seconds_remaining = %g, want it within the %g second allowance",
+			got.SecondsRemaining, got.ChallengeSeconds)
+	}
+}
+
+// The countdown is interpolated between responses, so it has to be on every
+// one of them.
+func TestFrameResponseCarriesTheCountdown(t *testing.T) {
+	fake := &fakeLiveness{
+		session: newFakeSession(t),
+		result: liveness.FrameResult{
+			State: liveness.StateInProgress, Challenge: liveness.ChallengeBlink,
+			Remaining: 3, SecondsRemaining: 7.5,
+		},
+	}
+
+	rec := do(livenessRouter(t, fake), authed(http.MethodPost, "/v1/liveness/sessions/abc/frames",
+		submitFrameRequest{Seq: 1, Nonce: "n", Frame: pngFrame(t, 16, 16)}))
+
+	var got submitFrameResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not valid JSON: %v", err)
+	}
+	if got.SecondsRemaining != 7.5 {
+		t.Errorf("seconds_remaining = %g, want 7.5", got.SecondsRemaining)
+	}
+}
+
 func TestSubmitFrameDecodesAndForwards(t *testing.T) {
 	fake := &fakeLiveness{
 		session: newFakeSession(t),
