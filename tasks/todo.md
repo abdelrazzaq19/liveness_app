@@ -18,7 +18,65 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T3 Docker + compose | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **Checkpoint 1** | — | ✅ **LOLOS** — 2026-08-07 |
 | T4 modelctl | ✅ selesai | ✅ **lolos** — 2026-08-07 |
-| T5 ⚠ ORT bootstrap | ⬜ berikutnya | — |
+| **T5 ⚠ ORT bootstrap** | ✅ selesai | ✅ **GATE LOLOS** — 2026-08-07 |
+| T6 detektor SCRFD | ⬜ berikutnya | — |
+
+### 🎯 Bukti T5 — GATE RISIKO LOLOS
+
+**Arsitektur satu-container bertahan.** `onnxruntime_go` memuat dan menjalankan
+SCRFD-10GF dari dalam container Debian slim.
+
+| Kriteria | Hasil |
+|---|---|
+| ORT terinisialisasi di container | `ONNX Runtime 1.28.0` |
+| Graph signature terbaca | input `input.1` `[1 3 -1 -1]`, 9 output di 3 stride |
+| Inferensi nyata berjalan | Output shape `[12800 1]`, `[3200 4]`, `[800 10]` dst — persis arsitektur SCRFD |
+| Model hilang → gagal saat load | ✅ bukan saat request pertama |
+| File bukan graph ONNX → gagal saat load | ✅ |
+| Pool konkurensi 100 goroutine × 50 | ✅ `-race` bersih, nol overlap, 5000 inferensi terhitung |
+| `Use` mengembalikan sesi setelah panic | ✅ pool tetap terpakai sesudahnya |
+| `Close` menunggu inferensi in-flight | ✅ tidak ada sesi dihancurkan saat masih dipakai |
+| Konkurensi model nyata | ✅ 24 inferensi, 8 goroutine, pool 2, `-race` bersih |
+
+### Temuan T5
+
+**Versi ORT harus dinaikkan 1.19.2 → 1.28.0.** `onnxruntime_go` v1.32 menyematkan
+header C dengan `ORT_API_VERSION 28` dan menolak inisialisasi terhadap library
+lama: *"The requested API version [28] is not available, only API versions
+[1, 19] are supported"*. API version melacak minor version ORT. Kedua versi ini
+terkunci satu sama lain dan sekarang dicatat begitu di Dockerfile dan SPEC §2.
+
+**Pool ditulis terhadap interface `runner`, bukan `*ort.DynamicAdvancedSession`.**
+Kebenaran konkurensi adalah seluruh alasan pool ini ada, jadi ia harus bisa
+di-test di setiap run — bukan hanya di mesin yang kebetulan punya 187 MB model.
+Fake-nya sekaligus mendeteksi dua goroutine masuk ke sesi yang sama, yaitu bug
+persis yang dicegah pool ini.
+
+### ⚠️ Risiko baru terhadap kriteria A4
+
+**Latensi detektor jauh di atas target.** A4 menuntut p95 < 150 ms per frame.
+Terukur pada CPU 8 core, input 640×640, `IntraOpThreads=2`, tanpa `-race`:
+
+| Skenario | Latensi |
+|---|---|
+| Satu inferensi | **336 ms** |
+| Konkuren, pool 2 | **225 ms** per inferensi |
+
+Ini **baru detektornya saja**. Pipeline penuh masih menambah landmarker,
+anti-spoof, dan embedder.
+
+Empat jalan keluar, belum diputuskan:
+
+1. **Turunkan resolusi input** 640→320. Empat kali lebih ringan. Konsekuensinya
+   wajah kecil/jauh lebih sulit terdeteksi.
+2. **Ganti ke SCRFD-500M** (`det_500m.onnx`, ada di paket `buffalo_s`). Sekitar
+   20× lebih ringan dari 10G. Akurasi deteksi turun.
+3. **Naikkan `IntraOpThreads`.** Diuji dengan 2 dari 8 core yang tersedia.
+   Kemungkinan besar ini yang paling murah dicoba lebih dulu.
+4. **Revisi target A4.** 150 ms mungkin memang tidak realistis untuk CPU murni.
+
+**Diukur dengan benar di T8** (bench CLI). Keputusan model diambil di T6.
+Belum memblokir apa pun.
 
 ### Bukti T4
 

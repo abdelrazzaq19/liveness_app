@@ -11,7 +11,11 @@
 
 ARG GO_VERSION=1.23
 ARG DEBIAN_RELEASE=bookworm
-ARG ORT_VERSION=1.19.2
+# ONNX Runtime's C API version tracks its minor version: 1.28 exposes API 28.
+# onnxruntime_go vendors a header pinned to a specific API version and refuses
+# to initialise against an older library, so these two move together. Bumping
+# the Go binding means checking this number.
+ARG ORT_VERSION=1.28.0
 
 # -----------------------------------------------------------------------------
 # ort: download and unpack ONNX Runtime

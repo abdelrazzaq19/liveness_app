@@ -42,7 +42,7 @@ Rekomendasi saya: **kerjakan berurutan** — Milestone A (liveness) harus jalan 
 |---|---|---|
 | Bahasa | **Go 1.23**, CGO **enabled** | Wajib CGO untuk binding ONNX Runtime. |
 | HTTP | `net/http` + `github.com/go-chi/chi/v5` | Router ringan, middleware ecosystem (request ID, recover, timeout) tanpa framework berat. |
-| Inference | `github.com/yalue/onnxruntime_go` + **ONNX Runtime 1.19 (CPU EP)** | Satu container, satu binary. Tidak perlu sidecar Python. |
+| Inference | `github.com/yalue/onnxruntime_go` v1.32 + **ONNX Runtime 1.28.0 (CPU EP)** | Satu container, satu binary. Tidak perlu sidecar Python. **Kedua versi bergerak bersama:** binding Go menyematkan header C dengan `ORT_API_VERSION` tetap dan menolak inisialisasi terhadap library yang lebih lama. API version melacak minor version ORT — 1.28 → API 28. Menaikkan salah satunya berarti memeriksa yang lain. |
 | Image I/O | `image/jpeg`, `image/png`, `golang.org/x/image/draw` | Stdlib cukup; hindari dependency OpenCV/gocv yang memberatkan build. |
 | Linear algebra | `gonum.org/v1/gonum` | PnP solver untuk head pose, operasi vektor embedding. |
 | Database | **PostgreSQL 16 + pgvector 0.7** (`pgvector/pgvector:pg16`) | Audit trail relasional + vector index (HNSW) dalam satu engine. Tidak perlu vector DB terpisah. |
