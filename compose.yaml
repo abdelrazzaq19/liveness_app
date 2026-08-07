@@ -1,0 +1,111 @@
+# Liveness Verifier — stack pengembangan lokal.
+#
+#   cp .env.example .env      # sekali, lalu isi nilai <ganti>
+#   docker compose up -d --build
+#
+# Semua port di-bind ke 127.0.0.1, bukan 0.0.0.0: database dan object store
+# tidak perlu terlihat dari jaringan lokal Anda.
+#
+# Butuh Docker Compose v2.24+ (untuk `env_file: required`).
+
+name: liveness-verifier
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-liveness}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD belum diset — salin .env.example ke .env}
+      POSTGRES_DB: ${POSTGRES_DB:-liveness}
+      # Pindai data ke disk lebih jarang; ini instance development.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-liveness} -d ${POSTGRES_DB:-liveness}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  minio:
+    # TODO(T31): pin ke tag RELEASE tertentu setelah stack pertama kali jalan.
+    # Sengaja dibiarkan `latest` dulu supaya build pertama tidak gagal hanya
+    # karena tag yang ditebak tidak ada.
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-liveness-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD belum diset — salin .env.example ke .env}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # Console web
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: runtime
+    image: liveness-verifier:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LV_MODELS_DIR: /models
+      LV_ONNXRUNTIME_LIB: /usr/local/lib/libonnxruntime.so
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Read-only: service tidak pernah menulis ke direktori model.
+      - ./models:/models:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # Toolchain: go, golangci-lint, gofumpt, goose.
+  #
+  #   docker compose run --rm dev go test ./... -race
+  #   docker compose run --rm dev golangci-lint run ./...
+  #
+  # `docker compose run` mengaktifkan profile ini otomatis, jadi service ini
+  # tidak ikut naik saat `docker compose up`.
+  dev:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: dev
+    image: liveness-verifier-dev:local
+    profiles: ["tools"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LV_MODELS_DIR: /src/models
+    working_dir: /src
+    volumes:
+      - .:/src
+      # Cache dipertahankan antar-run; tanpa ini setiap `go test` mengunduh
+      # dan mengompilasi ulang semuanya.
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+volumes:
+  pgdata:
+  miniodata:
+  gomodcache:
+  gobuildcache:
