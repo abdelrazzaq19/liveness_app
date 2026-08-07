@@ -222,7 +222,7 @@ func load(getenv func(string) string) (*Config, error) {
 			PoolSize:       l.intRange("LV_MODELS_POOL_SIZE", 2, 1, 64),
 			IntraOpThreads: l.intRange("LV_MODELS_INTRA_OP_THREADS", 0, 0, 128),
 			SharedLibrary:  l.str("LV_ONNXRUNTIME_LIB", "/usr/local/lib/libonnxruntime.so"),
-			Detector:       l.str("LV_MODEL_DETECTOR", "scrfd_10g_bnkps.onnx"),
+			Detector:       l.str("LV_MODEL_DETECTOR", "det_10g.onnx"),
 			Landmarker:     l.str("LV_MODEL_LANDMARKER", "2d106det.onnx"),
 			AntiSpoof:      l.str("LV_MODEL_ANTISPOOF", "minifasnet_v2.onnx"),
 			Embedder:       l.str("LV_MODEL_EMBEDDER", "w600k_r50.onnx"),

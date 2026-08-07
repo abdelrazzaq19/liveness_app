@@ -17,6 +17,49 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T2 HTTP + healthz | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T3 Docker + compose | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **Checkpoint 1** | — | ✅ **LOLOS** — 2026-08-07 |
+| T4 modelctl | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T5 ⚠ ORT bootstrap | ⬜ berikutnya | — |
+
+### Bukti T4
+
+| Kriteria | Hasil |
+|---|---|
+| `pin` merekam digest nyata | `buffalo_l` 275,3 MB, sha256 `80ffe37d…` |
+| `download` memasang model | `det_10g.onnx` 16,1 MB · `2d106det.onnx` 4,8 MB · `w600k_r50.onnx` 166,3 MB |
+| Idempoten | Run kedua: `ok buffalo_l (already present)`, nol request jaringan |
+| Byte dirusak → `verify` gagal | Menyebut `2d106det.onnx`, menampilkan kedua digest, exit 1 |
+| Dua file lain tetap dilaporkan | Semua masalah dilaporkan sekaligus, bukan berhenti di yang pertama |
+| `download` memperbaiki file rusak | Unduh ulang, ketiganya `ok` |
+| Tidak ada `.part` tersisa | Dikonfirmasi di test kegagalan maupun di direktori nyata |
+| Test / vet / lint / gofumpt | Hijau, nol issue |
+
+### Perubahan desain T4 (dari temuan saat implementasi)
+
+**`modelctl` harus bisa mengekstrak arsip.** InsightFace tidak merilis `.onnx`
+satuan — detector, landmarker, dan embedder ketiganya ada di dalam satu
+`buffalo_l.zip` (275 MB). Manifest karenanya mendukung dua bentuk artefak: file
+tunggal, dan arsip dengan daftar anggota yang diangkat. Pencocokan anggota jatuh
+ke nama dasar kalau path lengkapnya tidak ketemu, supaya perubahan struktur
+direktori di dalam arsip tidak merusak manifest.
+
+**Ditambahkan perintah `pin`.** SHA-256 model tidak diterbitkan upstream, jadi
+tidak ada nilai yang bisa ditulis ke manifest sebelum mengunduh sekali. `pin`
+mengunduh, menghitung, dan menulis digest yang teramati. Manifest jadi bekerja
+seperti lockfile: bukan bukti model tepercaya, tapi bukti tidak ada yang menukar
+file itu sejak di-pin.
+
+**Nama file detector dikoreksi.** SPEC menulis `scrfd_10g_bnkps.onnx`; nama
+sebenarnya di dalam paket adalah `det_10g.onnx` (model yang sama, SCRFD-10GF).
+Default di config dan `.env.example` disesuaikan.
+
+### ⛔ Blocker baru untuk T11
+
+**MiniFASNetV2 tidak punya rilis ONNX.** Upstream hanya merilis checkpoint
+PyTorch, jadi `modelctl` tidak bisa mengambilnya dan artefaknya tidak dicantumkan
+di manifest — lebih baik jujur daripada berpura-pura bisa. Opsi dan rekomendasi
+ada di [SPEC.md](../SPEC.md) Open Question #9.
+
+**Tidak memblokir T5–T10.**
 
 ### Bukti Checkpoint 1
 

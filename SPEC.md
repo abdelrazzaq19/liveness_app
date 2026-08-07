@@ -60,11 +60,15 @@ Rekomendasi saya: **kerjakan berurutan** — Milestone A (liveness) harus jalan 
 
 | Peran | Model | Output | Ukuran |
 |---|---|---|---|
-| Face detection | **SCRFD 10G-BNKPS** (`scrfd_10g_bnkps.onnx`) | bbox + 5 keypoint | ~17 MB |
-| Dense landmark | **2d106det** (`2d106det.onnx`) | 106 titik 2D | ~5 MB |
+| Face detection | **SCRFD-10GF** (`det_10g.onnx`) | bbox + 5 keypoint | 16,1 MB |
+| Dense landmark | **2d106det** (`2d106det.onnx`) | 106 titik 2D | 4,8 MB |
 | Head pose | Turunan dari 106 landmark via **PnP** (gonum), model kanonik 3D | yaw / pitch / roll (derajat) | — |
-| Passive anti-spoof | **MiniFASNetV2** (Silent-Face-Anti-Spoofing) | skor real/spoof per frame | ~2 MB |
-| Face embedding | **ArcFace w600k_r50** (buffalo_l) | vektor 512-dim, L2-normalized | ~166 MB |
+| Face embedding | **ArcFace w600k_r50** (`w600k_r50.onnx`) | vektor 512-dim, L2-normalized | 166,3 MB |
+| Passive anti-spoof | **MiniFASNetV2** — ⛔ **belum terselesaikan** | skor real/spoof per frame | ~2 MB |
+
+Ketiga model pertama datang dari satu paket, **`buffalo_l.zip`** (275 MB). InsightFace tidak merilisnya sebagai `.onnx` satuan, jadi `modelctl` mengunduh paketnya lalu mengangkat tiga anggota yang dibutuhkan.
+
+⛔ **MiniFASNetV2 tidak punya rilis ONNX resmi.** Sumber aslinya (Silent-Face-Anti-Spoofing) merilis checkpoint PyTorch `.pth`, bukan ONNX. Ini harus diputuskan sebelum T11 — lihat Open Question #9.
 
 Model **tidak** di-commit ke git dan **tidak** di-bake ke image. Diunduh sekali oleh `cmd/modelctl` ke volume `./models`, diverifikasi dengan SHA-256 yang tercatat di `models/manifest.json`.
 
@@ -493,6 +497,16 @@ Perlu jawaban Anda — beberapa memblokir kalibrasi, sisanya bisa diputuskan sam
 7. **Otentikasi.** Static API key sudah cukup untuk pemakaian lokal? Atau perlu langsung OIDC/mTLS?
 
 8. ~~**Bahasa dokumentasi & kode.**~~ ✅ **TERJAWAB (2026-08-07):** kode berbahasa Inggris, dokumentasi berbahasa Indonesia. Lihat baris "Bahasa" di §6.
+
+9. **Model anti-spoof pasif.** ⛔ **BARU — ditemukan saat T4.** MiniFASNetV2 tidak punya rilis ONNX resmi; upstream hanya merilis checkpoint PyTorch. Tiga jalan keluar:
+
+   | Opsi | Konsekuensi |
+   |---|---|
+   | **(a)** Konversi `.pth` → ONNX sendiri | Butuh Python + PyTorch sekali saat setup, lalu hasil konversinya di-pin di manifest. Menambah langkah setup yang tidak bisa dilakukan `modelctl` sendirian. |
+   | **(b)** Pakai model anti-spoof ONNX dari pihak ketiga | Cepat, tapi asal-usul dan lisensinya lebih sulit dipertanggungjawabkan. |
+   | **(c)** Tunda — andalkan pertahanan lain dulu | Lima dari enam lapis anti-replay di §5 tetap jalan tanpa model ini. Yang hilang adalah deteksi serangan cetak/layar dari satu frame, dan itu justru serangan paling umum. |
+
+   *Memblokir T11.* Tidak memblokir T5–T10. Rekomendasi saya: **(a)**, dengan skrip konversi terpisah yang dijalankan sekali dan hasilnya di-pin — asal-usulnya jelas dan hasilnya tetap reproducible.
 
 ---
 
