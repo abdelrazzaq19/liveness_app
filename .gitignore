@@ -1,0 +1,33 @@
+# Model ONNX: besar, dan berlisensi terpisah dari kode ini. Jangan pernah
+# di-commit. manifest.json tetap dilacak karena itulah yang membuat setup
+# reproducible.
+/models/*
+!/models/manifest.json
+!/models/README.md
+
+# Konfigurasi lokal dan secret.
+.env
+.env.local
+.env.*.local
+
+# Hasil build.
+/bin/
+/out/
+
+# Artefak test.
+coverage.out
+coverage.html
+*.test
+/testdata/tmp/
+
+# Data biometrik tidak pernah masuk repo, dalam bentuk apa pun.
+*.onnx
+/testdata/private/
+
+# OS dan editor.
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
