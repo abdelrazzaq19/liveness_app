@@ -28,3 +28,14 @@ var (
 type Detector interface {
 	Detect(ctx context.Context, img image.Image) (Detection, error)
 }
+
+// Landmarker refines a detected face into dense landmarks.
+//
+// It takes the detector's box rather than finding the face itself: the crop it
+// needs is defined relative to that box, and re-detecting would be both slower
+// and liable to disagree with the detection the rest of the pipeline is using.
+//
+// Coordinates come back in the source image's pixel space, never in the crop's.
+type Landmarker interface {
+	Landmarks(ctx context.Context, img image.Image, box BBox) (Landmarks106, error)
+}

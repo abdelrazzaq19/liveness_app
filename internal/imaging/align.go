@@ -149,19 +149,33 @@ func AlignFace(img image.Image, kps biometric.Keypoints, size int) (*image.RGBA,
 	if err != nil {
 		return nil, err
 	}
-	// Warping is done backwards: for each destination pixel, find where it came
-	// from. Going forwards would leave unwritten holes wherever the transform
-	// magnifies.
+	return Warp(img, forward, size, size)
+}
+
+// Warp resamples img through a similarity transform into a width x height
+// canvas.
+//
+// forward maps source coordinates to destination ones; the resampling runs the
+// other way, from each destination pixel back to where it came from. Going
+// forwards would leave unwritten holes wherever the transform magnifies.
+func Warp(img image.Image, forward Similarity, width, height int) (*image.RGBA, error) {
+	if img == nil {
+		return nil, errors.New("imaging: Warp: image is nil")
+	}
+	if width <= 0 || height <= 0 {
+		return nil, fmt.Errorf("imaging: Warp: size must be positive, got %dx%d", width, height)
+	}
+
 	inverse, err := forward.Invert()
 	if err != nil {
 		return nil, err
 	}
 
 	src := toRGBA(img)
-	out := image.NewRGBA(image.Rect(0, 0, size, size))
+	out := image.NewRGBA(image.Rect(0, 0, width, height))
 
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
 			p := inverse.Apply(biometric.Point{X: float64(x), Y: float64(y)})
 			out.SetRGBA(x, y, sampleBilinear(src, p.X, p.Y))
 		}
