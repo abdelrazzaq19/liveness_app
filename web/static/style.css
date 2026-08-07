@@ -1,0 +1,115 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --line: #262b36;
+  --text: #e6e9ef;
+  --muted: #8b93a5;
+  --accent: #4c8dff;
+  --ok: #35c07d;
+  --warn: #e0a33a;
+  --bad: #e2564d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main { max-width: 62rem; margin: 0 auto; }
+
+h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+.sub, footer p { color: var(--muted); font-size: .875rem; margin: 0; }
+code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: .85em; }
+
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+@media (max-width: 780px) {
+  .stage { grid-template-columns: 1fr; }
+}
+
+.viewport {
+  position: relative;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  overflow: hidden;
+  aspect-ratio: 3 / 4;
+}
+
+/* Mirrored so the preview behaves like a mirror, which is what people expect.
+   The instruction text is flipped to compensate; the API's own convention is
+   image-relative and never mirrored. */
+video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+
+.badge {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: .6rem .9rem;
+  font-weight: 600;
+  text-align: center;
+  background: #000c;
+}
+.badge.ok  { background: color-mix(in srgb, var(--ok) 85%, black); }
+.badge.bad { background: color-mix(in srgb, var(--bad) 85%, black); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: .9rem;
+}
+
+.instruction { font-size: 1.35rem; font-weight: 650; margin: 0; min-height: 2.6rem; }
+.hint { color: var(--muted); margin: 0; min-height: 1.4rem; font-size: .9rem; }
+
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.steps li {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .45rem .6rem;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  color: var(--muted);
+  font-size: .9rem;
+}
+.steps li::before { content: "○"; }
+.steps li.active { color: var(--text); border-color: var(--accent); }
+.steps li.active::before { content: "●"; color: var(--accent); }
+.steps li.done { color: var(--ok); }
+.steps li.done::before { content: "✓"; }
+
+.controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
+.field { display: flex; flex-direction: column; gap: .25rem; flex: 1 1 14rem; }
+.field span { font-size: .78rem; color: var(--muted); }
+
+input, button {
+  font: inherit;
+  border-radius: .5rem;
+  border: 1px solid var(--line);
+  padding: .5rem .75rem;
+}
+input { background: #0d1016; color: var(--text); width: 100%; }
+button { background: var(--accent); color: #fff; border-color: transparent; cursor: pointer; font-weight: 600; }
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: .5; cursor: default; }
+#stop { background: transparent; color: var(--muted); border-color: var(--line); }
+
+.status { margin: 0; font-size: .875rem; min-height: 1.3rem; color: var(--muted); }
+.status.ok  { color: var(--ok); }
+.status.bad { color: var(--bad); }
+.status.warn { color: var(--warn); }
+
+footer { border-top: 1px solid var(--line); padding-top: 1rem; }

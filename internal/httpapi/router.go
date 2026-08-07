@@ -8,12 +8,14 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ziad/liveness-verifier/internal/config"
+	"github.com/ziad/liveness-verifier/internal/imaging"
 )
 
 // Deps carries everything the router needs. Wiring happens in cmd/server; this
@@ -21,6 +23,11 @@ import (
 type Deps struct {
 	Config *config.Config
 	Logger *slog.Logger
+
+	// Liveness serves the verification endpoints. A nil value leaves them
+	// unmounted, which is what the health-only configuration in the earliest
+	// tests relies on.
+	Liveness LivenessService
 }
 
 func (d Deps) validate() error {
@@ -61,12 +68,31 @@ func NewRouter(d Deps) (http.Handler, error) {
 	})
 
 	// Unauthenticated: container and load-balancer probes must not need a key.
-	r.Get("/healthz", handleHealthz(log))
+	r.Get("/healthz", handleHealthz(log, string(d.Config.Models.Mode)))
+
+	if err := mountDemo(r); err != nil {
+		return nil, fmt.Errorf("httpapi: mount demo: %w", err)
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(APIKeyAuth(d.Config.Server.APIKeys, log))
 
-		// Liveness and face endpoints are mounted here by later tasks.
+		if d.Liveness != nil {
+			h := &livenessHandler{
+				svc: d.Liveness,
+				log: log,
+				limits: imaging.Limits{
+					MaxBytes:  d.Config.Server.MaxFrameBytes,
+					MaxPixels: d.Config.Imaging.MaxDecodedPixels,
+				},
+				// Base64 inflates by a third; the rest is room for the JSON
+				// around it.
+				maxBodyBytes: d.Config.Server.MaxFrameBytes*4/3 + 4096,
+			}
+			r.Route("/liveness", h.routes)
+		}
+
+		// Face endpoints are mounted here by later tasks.
 
 		// A chi sub-router builds its middleware chain lazily, and only once at
 		// least one route is registered on it. Without this catch-all the
@@ -88,10 +114,15 @@ func NewRouter(d Deps) (http.Handler, error) {
 // running", not "can it serve traffic" — that is what /readyz will be for.
 type healthStatus struct {
 	Status string `json:"status"`
+
+	// Pipeline says whether real models are in use. The demo page shows it,
+	// because a session that passed against the stub proves only that the
+	// wiring works and it would be easy to forget which one is running.
+	Pipeline string `json:"pipeline,omitempty"`
 }
 
-func handleHealthz(log *slog.Logger) http.HandlerFunc {
+func handleHealthz(log *slog.Logger, pipeline string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, log, http.StatusOK, healthStatus{Status: "ok"})
+		writeJSON(w, log, http.StatusOK, healthStatus{Status: "ok", Pipeline: pipeline})
 	}
 }

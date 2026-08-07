@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liveness Verifier — Demo</title>
+<link rel="stylesheet" href="/demo/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Verifikasi Liveness</h1>
+    <p class="sub">Demo lokal. Butuh izin kamera, dan hanya bekerja lewat <code>localhost</code>.</p>
+  </header>
+
+  <section class="stage">
+    <div class="viewport">
+      <!-- Mirrored, the way people expect a selfie preview to look. The
+           instruction text compensates for it; see app.js. -->
+      <video id="preview" autoplay playsinline muted></video>
+      <canvas id="capture" hidden></canvas>
+      <div id="badge" class="badge" hidden></div>
+    </div>
+
+    <div class="panel">
+      <p id="instruction" class="instruction">Tekan mulai untuk memulai sesi.</p>
+      <p id="hint" class="hint"></p>
+
+      <ol id="steps" class="steps"></ol>
+
+      <div class="controls">
+        <label class="field">
+          <span>API key</span>
+          <input id="apikey" type="password" autocomplete="off" placeholder="LV_API_KEYS dari .env">
+        </label>
+        <button id="start" type="button">Mulai</button>
+        <button id="stop" type="button" hidden>Batalkan</button>
+      </div>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Bukan sistem tersertifikasi PAD. Ambang belum dikalibrasi.
+      Mode <code id="mode">?</code>.
+    </p>
+  </footer>
+</main>
+
+<script src="/demo/app.js"></script>
+</body>
+</html>

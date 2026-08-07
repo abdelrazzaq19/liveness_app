@@ -45,7 +45,24 @@ func run() error {
 	log := newLogger(cfg.Log)
 	slog.SetDefault(log)
 
-	handler, err := httpapi.NewRouter(httpapi.Deps{Config: cfg, Logger: log})
+	// Everything that can fail about the wiring fails here, before the listener
+	// opens. A service that accepts connections it cannot serve is worse than
+	// one that refuses to start.
+	application, err := build(context.Background(), cfg, log)
+	if err != nil {
+		return fmt.Errorf("build application: %w", err)
+	}
+	defer func() {
+		if err := application.Close(); err != nil {
+			log.Error("shutdown incomplete", slog.String("error", err.Error()))
+		}
+	}()
+
+	handler, err := httpapi.NewRouter(httpapi.Deps{
+		Config:   cfg,
+		Logger:   log,
+		Liveness: application.Liveness,
+	})
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)
 	}
