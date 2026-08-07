@@ -77,6 +77,27 @@ services:
       minio:
         condition: service_healthy
 
+  # Pengunduh model. Dijalankan sekali saat setup:
+  #
+  #   docker compose --profile setup run --rm modelctl download
+  #   docker compose --profile setup run --rm modelctl verify
+  #
+  # Memakai image dev karena butuh toolchain Go; entrypoint-nya dikunci ke
+  # modelctl supaya perintahnya tetap pendek.
+  modelctl:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: dev
+    image: liveness-verifier-dev:local
+    profiles: ["setup"]
+    working_dir: /src
+    entrypoint: ["go", "run", "./cmd/modelctl"]
+    volumes:
+      - .:/src
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
   # Toolchain: go, golangci-lint, gofumpt, goose.
   #
   #   docker compose run --rm dev go test ./... -race

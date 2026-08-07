@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "artifacts": [
+    {
+      "name": "buffalo_l",
+      "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+      "sha256": "80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f",
+      "size_bytes": 288621354,
+      "license": "InsightFace pre-trained models - non-commercial research use only",
+      "license_url": "https://github.com/deepinsight/insightface/tree/master/model_zoo",
+      "notes": "det_10g.onnx is SCRFD-10GF. InsightFace does not publish these as standalone .onnx files, so the whole pack is fetched and the three members we need are lifted out of it.",
+      "extract": [
+        {
+          "path": "det_10g.onnx",
+          "as": "det_10g.onnx",
+          "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91"
+        },
+        {
+          "path": "2d106det.onnx",
+          "as": "2d106det.onnx",
+          "sha256": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf"
+        },
+        {
+          "path": "w600k_r50.onnx",
+          "as": "w600k_r50.onnx",
+          "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+        }
+      ]
+    }
+  ]
+}
