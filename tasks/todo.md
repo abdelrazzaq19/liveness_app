@@ -23,6 +23,8 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T7 imaging | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T8 bench CLI | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **Checkpoint 2** | — | ✅ **GATE LOLOS** — 2026-08-07 |
+| T9 landmark 106 + EAR/MAR | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T10 head pose (PnP) | ⬜ berikutnya | — |
 
 ### Bukti T8
 
@@ -57,6 +59,60 @@ belum dihitung. Analisis lengkap dan tiga hal yang belum diketahui ada di
 
 Default tetap 640: lingkungan pengukuran ini tidak layak dijadikan dasar
 mengorbankan kualitas deteksi, dan pindah ke 320 hanya satu env var.
+
+### Bukti T9
+
+| Kriteria | Hasil |
+|---|---|
+| 106 landmark dalam koordinat **gambar**, bukan crop | ✅ box {300,400}–{420,560} → bounds {303,9 · 406,9}–{419,3 · 544,8} |
+| Indeks EAR/MAR sebagai konstanta bernama | ✅ nol angka telanjang di dalam rumus |
+| Test EAR: mata tertutup < 0,21, terbuka > 0,30 | ✅ landmark sintetis, rasio **eksak** sampai 1e-9 |
+| EAR/MAR invarian skala | ✅ diuji pada skala 0,25× sampai 11× |
+| Landmark rusak → 0, bukan NaN/Inf | ✅ |
+| Geometri wajah: mata kiri < kanan, mulut di bawah mata | ✅ pada model nyata |
+| Graph salah ditolak saat konstruksi | ✅ detektor ditolak sebagai landmarker |
+| Cakupan `internal/biometric` | **98,0%** |
+
+### 🔬 Peta indeks 106 titik ditentukan secara empiris
+
+Menebak indeks berarti menaruh angka salah di dalam rumus EAR — kelas kesalahan
+yang gejalanya hanya "deteksi kedipnya agak meleset". Jadi tidak ditebak.
+
+Model landmark meregresi ke **wajah rata-rata** ketika diberi input tanpa wajah,
+dan bentuk kanonik itu membuat kelompoknya tidak ambigu:
+
+| Indeks | Bukti dari output model | Isi |
+|---|---|---|
+| 0–32 | rentang terluar, x 49→143, dagu di y=168 | kontur |
+| 33–42 | 10 titik, lebar 12 tinggi 5 (bentuk mata), x≈90 | mata kiri |
+| 43–51 | 9 titik, tepat di atas 33–42 | alis kiri |
+| 52–71 | 20 titik, y 125–146 | mulut |
+| 72–86 | 15 titik, sebar vertikal 37 | hidung |
+| 87–96 | 10 titik, x≈120, struktur identik 33–42 | mata kanan |
+| 97–105 | 9 titik, di atas 87–96 | alis kanan |
+
+33+10+9+20+15+10+9 = 106 ✓
+
+Di dalam blok mata: offset +2/+6 adalah sudut (x ekstrem), +7/+8/+9 kelopak atas,
++0/+3/+4 kelopak bawah — berpasangan vertikal rapi berdasarkan x. Itu yang
+membuat rasio berarti: tiap pasang mengukur bukaan mata di satu posisi
+horizontal.
+
+Test `TestLandmarkIndexRangesTileEveryPoint` memastikan rentangnya menutup 0..105
+tanpa celah atau tumpang tindih, jadi peta yang salah menggagalkan test, bukan
+diam-diam merusak setiap pengukuran kedipan.
+
+### ⛔ Ambang EAR/MAR tidak berpindah dari literatur
+
+Angka di config (EAR 0,21/0,30, MAR 0,55) adalah nilai literatur untuk skema
+**68 titik dlib**. Project ini memakai 106 titik dengan pilihan indeks sendiri.
+
+**Bukti konkret:** pada wajah rata-rata dengan **mulut tertutup**, MAR terukur
+**0,520** — nyaris menyentuh ambang 0,55. Ambang itu akan salah mengklasifikasi.
+
+Artinya **T30 (kalibrasi) bukan pemolesan opsional, melainkan syarat** sebelum
+evaluator T17 berarti apa pun. Sudah ditandai di `.env.example` dan di doc
+comment `MouthAspectRatio`.
 
 ### Deviasi T8
 
