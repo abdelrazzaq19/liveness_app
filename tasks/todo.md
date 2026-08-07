@@ -19,7 +19,79 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | **Checkpoint 1** | — | ✅ **LOLOS** — 2026-08-07 |
 | T4 modelctl | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | **T5 ⚠ ORT bootstrap** | ✅ selesai | ✅ **GATE LOLOS** — 2026-08-07 |
-| T6 detektor SCRFD | ⬜ berikutnya | — |
+| T6 detektor SCRFD | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T7 imaging | ⬜ berikutnya | — |
+
+### Bukti T6
+
+| Kriteria | Hasil |
+|---|---|
+| `biometric.Detector` didefinisikan di `ports.go` | ✅ `internal/biometric` tidak mengimpor `onnxruntime_go` |
+| Decode jarak-ke-tepi benar | ✅ tensor buatan tangan, bbox cocok persis |
+| Tata letak anchor cell-major | ✅ 5 posisi diuji, termasuk sudut dan anchor kedua |
+| Keypoint decode | ✅ kelima titik, offset positif dan negatif |
+| NMS | ✅ overlap berat, disjoint, di bawah ambang, rantai supresi |
+| NMS urut skor menurun | ✅ |
+| Letterbox: skala, padding, normalisasi, urutan RGB | ✅ empat rasio aspek, konstanta 127,5/128 diverifikasi |
+| Tensor pendek ditolak | ✅ scores/boxes/keypoints, masing-masing |
+| Graph bukan SCRFD ditolak saat konstruksi | ✅ jumlah input dan output diperiksa |
+| `ErrNoFaceFound` bukan Detection kosong | ✅ |
+| Golden file | ✅ terekam dan cocok saat dijalankan ulang |
+| Test / vet / lint | ✅ hijau, nol issue |
+
+### 📊 Jawaban untuk pertanyaan latensi T5
+
+Benchmark `det_10g.onnx`, CPU 8 core, adegan sintetis 480×640, `-benchtime 5x`:
+
+| Input | thread auto | 2 thread | 4 thread |
+|---|---|---|---|
+| **640** | 504 ms | 942 ms | 499 ms |
+| **512** | 296 ms | 324 ms | 353 ms |
+| **384** | 175 ms | 191 ms | 295 ms |
+| **320** | **127 ms** | **119 ms** | 124 ms |
+
+Tiga kesimpulan:
+
+1. **Menaikkan thread tidak menolong.** Default ONNX Runtime (auto) sudah sebaik
+   atau lebih baik dari nilai manual mana pun. Opsi 3 di catatan T5 gugur.
+2. **Resolusi yang menentukan.** 640→320 memberi percepatan ~4×, persis sesuai
+   pengurangan jumlah piksel. Tidak ada kejutan, dan tidak ada trik lain.
+3. **`det_10g` tidak muat di anggaran A4.** Bahkan di 320×320 ia memakai 127 ms
+   dari 150 ms — dan itu **hanya detektor**. Landmarker, anti-spoof, dan embedder
+   belum dihitung sama sekali.
+
+**Rekomendasi: ganti ke SCRFD-500M** (`det_500m.onnx`, ada di paket `buffalo_s`).
+Sekitar 20× lebih ringan. Perlu keputusan Anda karena T4 harus menambah artefak
+`buffalo_s` ke manifest. Faktor yang meringankan: untuk selfie liveness, wajah
+memenuhi sebagian besar frame, jadi 320×320 dengan model ringan masuk akal.
+
+### ⚠️ Batas dari golden test ini
+
+Golden merekam **sidik jari model**, bukan deteksi wajah sungguhan. Adegan
+sintetisnya tidak dikenali sebagai wajah — skor maksimum hanya 0,024–0,035 di
+ketiga stride, jauh di bawah ambang mana pun.
+
+Artinya:
+
+- ✅ **Kebenaran decode terverifikasi persis.** Tensor buatan tangan dengan hasil
+  yang diketahui menguji regresi jarak-ke-tepi, tata letak anchor, keypoint, NMS,
+  dan letterbox. Di situlah bug sebenarnya hidup, dan di situ pengujiannya kuat.
+- ✅ **Pertukaran model tertangkap.** Jumlah anchor dan skor maksimum per stride
+  berubah begitu file model diganti.
+- ⛔ **Deteksi wajah sungguhan tidak terverifikasi.** Tidak ada bukti pipeline ini
+  benar-benar menemukan wajah manusia.
+
+Ini konsekuensi langsung dari aturan SPEC §7: tidak ada foto orang sungguhan di
+`testdata/`. Untuk menutupnya perlu wajah sintetis berkualitas atau dataset
+berlisensi CC0 — sama dengan Open Question #3 (dataset kalibrasi). Tertutup di
+T8 sekaligus, kalau datasetnya sudah ada.
+
+### Deviasi T6
+
+**Golden file di `internal/biometric/onnx/testdata/golden/`, bukan
+`testdata/golden/` di root** seperti SPEC §4. `testdata` per-paket adalah
+konvensi Go — `go test` menjalankan test dengan cwd di direktori paketnya, jadi
+path root berarti `../../../testdata/...` di setiap pemanggilan.
 
 ### 🎯 Bukti T5 — GATE RISIKO LOLOS
 
