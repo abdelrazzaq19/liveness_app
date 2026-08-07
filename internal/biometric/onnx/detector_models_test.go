@@ -23,6 +23,13 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite the golden files from the current model output")
 
+// detectorModel is the detector the service actually runs.
+//
+// SCRFD-500M rather than SCRFD-10G: the heavier model needs 127 ms per frame
+// even at 320x320, which leaves nothing of the 150 ms budget for the three
+// models that follow it in the pipeline.
+const detectorModel = "det_500m.onnx"
+
 // syntheticScene draws a deterministic image with face-like structure.
 //
 // It is drawn rather than committed as a fixture for two reasons: no photograph
@@ -132,7 +139,7 @@ func writeGolden(t *testing.T, g scrfdGolden) {
 func newDetector(t *testing.T, inputSize int, minScore float64) *SCRFD {
 	t.Helper()
 
-	rt, path := newRealRuntime(t, "det_10g.onnx")
+	rt, path := newRealRuntime(t, detectorModel)
 
 	pool, err := rt.LoadModel(ModelSpec{
 		Name: "detector", Path: path, PoolSize: 1, IntraOpThreads: 0,
@@ -165,7 +172,7 @@ func TestSCRFDGolden(t *testing.T) {
 	scene := syntheticScene(sceneW, sceneH)
 
 	got := scrfdGolden{
-		Model:     "det_10g.onnx",
+		Model:     detectorModel,
 		InputSize: inputSize,
 		SceneW:    sceneW,
 		SceneH:    sceneH,
@@ -326,19 +333,18 @@ func TestDetectRejectsUnusableImages(t *testing.T) {
 	})
 }
 
-// BenchmarkDetectorInputSize answers the question T5 left open: how much of the
-// A4 latency budget is spent on input resolution.
+// BenchmarkDetector measures the cost of a detection across models and input
+// sizes. It is what the choice of detector is argued from.
 //
 //	docker compose run --rm dev go test -tags=models ./internal/biometric/onnx/ \
-//	  -run '^$' -bench BenchmarkDetectorInputSize -benchtime 5x
-func BenchmarkDetectorInputSize(b *testing.B) {
+//	  -run '^$' -bench BenchmarkDetector -benchtime 10x
+func BenchmarkDetector(b *testing.B) {
 	scene := syntheticScene(480, 640)
 
-	for _, size := range []int{640, 512, 384, 320} {
-		for _, threads := range []int{0, 2, 4} {
-			name := fmt.Sprintf("size=%d/threads=%d", size, threads)
-			b.Run(name, func(b *testing.B) {
-				path := filepath.Join(modelsDir(), "det_10g.onnx")
+	for _, model := range []string{"det_500m.onnx", "det_10g.onnx"} {
+		for _, size := range []int{640, 480, 320} {
+			b.Run(fmt.Sprintf("%s/size=%d", model, size), func(b *testing.B) {
+				path := filepath.Join(modelsDir(), model)
 				if _, err := os.Stat(path); err != nil {
 					b.Skipf("model %s is not present", path)
 				}
@@ -350,7 +356,7 @@ func BenchmarkDetectorInputSize(b *testing.B) {
 				defer func() { _ = rt.Close() }()
 
 				pool, err := rt.LoadModel(ModelSpec{
-					Name: "detector", Path: path, PoolSize: 1, IntraOpThreads: threads,
+					Name: "detector", Path: path, PoolSize: 1,
 				})
 				if err != nil {
 					b.Fatalf("LoadModel(): %v", err)

@@ -121,6 +121,15 @@ type Models struct {
 	Landmarker string
 	AntiSpoof  string
 	Embedder   string
+
+	// DetectorInputSize is the side of the square the frame is letterboxed
+	// into before detection. It dominates detector cost: halving it is roughly
+	// four times cheaper, at the price of missing smaller faces.
+	DetectorInputSize int
+
+	// DetectorNMSIoU is the overlap above which the weaker of two overlapping
+	// face boxes is discarded.
+	DetectorNMSIoU float64
 }
 
 // Imaging holds decode limits and the frame quality gate.
@@ -217,15 +226,17 @@ func load(getenv func(string) string) (*Config, error) {
 			UseSSL:    l.boolean("LV_OBJSTORE_USE_SSL", false),
 		},
 		Models: Models{
-			Mode:           PipelineMode(l.oneOf("LV_PIPELINE_MODE", string(PipelineStub), string(PipelineStub), string(PipelineONNX))),
-			Dir:            l.str("LV_MODELS_DIR", "/models"),
-			PoolSize:       l.intRange("LV_MODELS_POOL_SIZE", 2, 1, 64),
-			IntraOpThreads: l.intRange("LV_MODELS_INTRA_OP_THREADS", 0, 0, 128),
-			SharedLibrary:  l.str("LV_ONNXRUNTIME_LIB", "/usr/local/lib/libonnxruntime.so"),
-			Detector:       l.str("LV_MODEL_DETECTOR", "det_10g.onnx"),
-			Landmarker:     l.str("LV_MODEL_LANDMARKER", "2d106det.onnx"),
-			AntiSpoof:      l.str("LV_MODEL_ANTISPOOF", "minifasnet_v2.onnx"),
-			Embedder:       l.str("LV_MODEL_EMBEDDER", "w600k_r50.onnx"),
+			Mode:              PipelineMode(l.oneOf("LV_PIPELINE_MODE", string(PipelineStub), string(PipelineStub), string(PipelineONNX))),
+			Dir:               l.str("LV_MODELS_DIR", "/models"),
+			PoolSize:          l.intRange("LV_MODELS_POOL_SIZE", 2, 1, 64),
+			IntraOpThreads:    l.intRange("LV_MODELS_INTRA_OP_THREADS", 0, 0, 128),
+			SharedLibrary:     l.str("LV_ONNXRUNTIME_LIB", "/usr/local/lib/libonnxruntime.so"),
+			Detector:          l.str("LV_MODEL_DETECTOR", "det_500m.onnx"),
+			Landmarker:        l.str("LV_MODEL_LANDMARKER", "2d106det.onnx"),
+			AntiSpoof:         l.str("LV_MODEL_ANTISPOOF", "minifasnet_v2.onnx"),
+			Embedder:          l.str("LV_MODEL_EMBEDDER", "w600k_r50.onnx"),
+			DetectorInputSize: l.intRange("LV_DETECTOR_INPUT_SIZE", 640, 128, 1920),
+			DetectorNMSIoU:    l.float("LV_DETECTOR_NMS_IOU", 0.4, 0.01, 1),
 		},
 		Imaging: Imaging{
 			MaxDecodedPixels: l.intRange("LV_IMG_MAX_DECODED_PIXELS", 16_000_000, 100_000, 200_000_000),
@@ -307,6 +318,15 @@ func (l *loader) crossValidate(c *Config) {
 		l.errs = append(l.errs, fmt.Errorf(
 			"LV_DATABASE_MIN_CONNS (%d) must not exceed LV_DATABASE_MAX_CONNS (%d)",
 			c.Database.MinConns, c.Database.MaxConns))
+	}
+
+	// The largest detector stride is 32, and the anchor grid is the input size
+	// divided by it. A size that is not a multiple of 32 leaves a partial cell
+	// whose anchors decode to nonsense coordinates.
+	if c.Models.DetectorInputSize%32 != 0 {
+		l.errs = append(l.errs, fmt.Errorf(
+			"LV_DETECTOR_INPUT_SIZE (%d) must be a multiple of 32, the detector's largest stride",
+			c.Models.DetectorInputSize))
 	}
 
 	// Searching a smaller candidate list than the requested result count

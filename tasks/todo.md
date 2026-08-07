@@ -60,10 +60,35 @@ Tiga kesimpulan:
    dari 150 ms — dan itu **hanya detektor**. Landmarker, anti-spoof, dan embedder
    belum dihitung sama sekali.
 
-**Rekomendasi: ganti ke SCRFD-500M** (`det_500m.onnx`, ada di paket `buffalo_s`).
-Sekitar 20× lebih ringan. Perlu keputusan Anda karena T4 harus menambah artefak
-`buffalo_s` ke manifest. Faktor yang meringankan: untuk selfie liveness, wajah
-memenuhi sebagian besar frame, jadi 320×320 dengan model ringan masuk akal.
+### ✅ Keputusan: ganti ke SCRFD-500M (2026-08-07)
+
+Diukur setelah `buffalo_s` masuk manifest:
+
+| Model | 640×640 | 480×480 | 320×320 |
+|---|---|---|---|
+| **SCRFD-500M** | **73 ms** | 49 ms | 33 ms |
+| SCRFD-10GF | 327 ms | 216 ms | 116 ms |
+
+**Ternyata bukan trade-off sama sekali.** SCRFD-500M di resolusi penuh 640
+(73 ms) lebih cepat daripada SCRFD-10GF di seperempat resolusi 320 (116 ms).
+Jadi kita dapat resolusi lebih tinggi **dan** latensi lebih rendah — kekhawatiran
+"wajah kecil jadi sulit terdeteksi" tidak perlu dibayar.
+
+Default sekarang: `det_500m.onnx` di `LV_DETECTOR_INPUT_SIZE=640`. Menyisakan
+~77 ms dari anggaran 150 ms untuk landmarker, anti-spoof, dan embedder.
+
+Perubahan yang menyertainya:
+
+- `buffalo_s.zip` (122 MB) masuk manifest, hanya `det_500m.onnx` yang diangkat.
+- `modelctl pin` sekarang **melewati artefak yang sudah ter-pin dan lengkap**.
+  Tanpa itu, menambah satu entri berarti mengunduh ulang 275 MB yang sudah ada.
+  `-force` untuk merekam ulang ketika upstream mengganti rilisnya.
+- `LV_DETECTOR_INPUT_SIZE` dan `LV_DETECTOR_NMS_IOU` masuk config, dengan
+  cross-validation bahwa ukurannya kelipatan 32 — stride terbesar detektor.
+  Ukuran yang bukan kelipatan 32 menyisakan sel anchor separuh yang decode-nya
+  menghasilkan koordinat ngawur.
+- `det_10g.onnx` tetap di disk: ikut terbawa paket `buffalo_l`, berguna sebagai
+  pembanding di benchmark.
 
 ### ⚠️ Batas dari golden test ini
 
