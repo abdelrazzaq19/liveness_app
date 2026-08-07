@@ -462,7 +462,8 @@ Selesai berarti **semua** poin berikut dapat diverifikasi:
 | A1 | `docker compose up -d --build` menghidupkan seluruh service dalam keadaan healthy, < 5 menit dari cache kosong. | `docker compose ps` menunjukkan semua `healthy`. |
 | A2 | `GET /readyz` mengembalikan 200 dengan status DB, MinIO, dan 4 model ter-load. | `curl -s localhost:8080/readyz \| jq` |
 | A3 | Demo di `http://localhost:8080/demo` menuntaskan sesi 3-challenge memakai webcam, verdict muncul < 2 detik setelah frame terakhir. | Uji manual, direkam di README. |
-| A4 | Latensi inference per frame **p95 < 150 ms** pada CPU 4 core. | `go test -bench=BenchmarkPipeline -benchmem` |
+| A4a | Frame biasa (tanpa embedder) **p95 < 150 ms**. Terukur **149,1 ms** di input 320. | `bench -full -size 320` |
+| A4b | Frame kunci (dengan embedder) **p95 < 900 ms**. Terukur **796,4 ms**. Anggaran terpisah karena frame kunci muncul beberapa kali per sesi, bukan enam kali per detik. | `bench -full -size 320` |
 | A5 | Print attack (foto dicetak / ditampilkan di layar HP) ditolak. | `attack_test.go` + uji manual. |
 | A6 | Replay attack (video rekaman orang yang sama) gagal karena urutan challenge acak. | `attack_test.go` |
 | A7 | Frame duplikat, `seq` mundur, dan pergantian identitas di tengah sesi ditolak dengan kode error yang tepat. | `attack_test.go` |

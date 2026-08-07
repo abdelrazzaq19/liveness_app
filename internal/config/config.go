@@ -235,7 +235,7 @@ func load(getenv func(string) string) (*Config, error) {
 			Landmarker:        l.str("LV_MODEL_LANDMARKER", "2d106det.onnx"),
 			AntiSpoof:         l.str("LV_MODEL_ANTISPOOF", "minifasnet_v2.onnx"),
 			Embedder:          l.str("LV_MODEL_EMBEDDER", "w600k_r50.onnx"),
-			DetectorInputSize: l.intRange("LV_DETECTOR_INPUT_SIZE", 640, 128, 1920),
+			DetectorInputSize: l.intRange("LV_DETECTOR_INPUT_SIZE", 320, 128, 1920),
 			DetectorNMSIoU:    l.float("LV_DETECTOR_NMS_IOU", 0.4, 0.01, 1),
 		},
 		Imaging: Imaging{

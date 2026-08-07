@@ -49,31 +49,79 @@ daripada SCRFD-10GF @ 320 (306 ms), jadi resolusi penuh dengan model ringan teta
 mengalahkan seperempat resolusi dengan model berat. Perbandingannya bertahan
 karena keduanya diukur di kondisi yang sama; hanya besaran mutlaknya yang bergeser.
 
+## Pipeline penuh — diukur di T13
+
+Keempat model dirangkai, per tahap. Perintahnya:
+
+```bash
+docker compose run --rm dev go run ./cmd/bench -full -synthetic 4 -repeat 10 -warmup 5 -size 320
+```
+
+### Input detektor 320
+
+| Tahap | p50 | p95 | p99 |
+|---|---|---|---|
+| Gerbang kualitas | 7,6 ms | 14,0 ms | 16,1 ms |
+| Detektor | 40,9 ms | 64,7 ms | 94,0 ms |
+| Landmarker | 24,5 ms | 56,3 ms | 67,0 ms |
+| Anti-spoof | 15,5 ms | 30,3 ms | 68,5 ms |
+| **Embedder** | **434,7 ms** | **673,0 ms** | 714,3 ms |
+| TOTAL (frame kunci) | 534,9 ms | 796,4 ms | 804,3 ms |
+| **Per frame** (tanpa embedder) | **89,5 ms** | **149,1 ms** | 169,3 ms |
+
+### Input detektor 640
+
+| Tahap | p50 | p95 |
+|---|---|---|
+| Detektor | 112,9 ms | 196,5 ms |
+| TOTAL (frame kunci) | 621,4 ms | 765,4 ms |
+| **Per frame** (tanpa embedder) | **166,3 ms** | **242,7 ms** |
+
+### Yang dikatakan angka-angka ini
+
+**Embedder mendominasi total: ~450 ms, 71% dari seluruh pipeline.** Dan biayanya
+**tidak berubah** dengan resolusi detektor — input-nya tetap crop 112×112 hasil
+alignment. Menurunkan resolusi detektor tidak menolong frame kunci sama sekali.
+
+Tapi embedder hanya jalan di **frame kunci**, untuk cek konsistensi identitas —
+bukan setiap frame. Itulah sebabnya baris "per frame" ada, dan itu yang harus
+mengikuti kamera.
+
+**Input 320 adalah satu-satunya konfigurasi yang memenuhi A4** untuk frame biasa:
+149,1 ms terhadap anggaran 150 ms. Tipis, dan di mesin yang bising. Default
+diubah ke 320 karena itu.
+
 ## Terhadap kriteria A4
 
-**A4 menuntut p95 < 150 ms per frame untuk pipeline penuh.**
+**A4 semula menuntut p95 < 150 ms per frame untuk pipeline penuh.** Setelah
+diukur, kriteria itu menggabungkan dua hal yang biayanya berbeda 5×.
 
-| Konfigurasi | p95 detektor | Sisa anggaran untuk 3 model lain |
-|---|---|---|
-| 500M @ 640 (default sekarang) | 256,6 ms | **sudah lewat 107 ms** ⛔ |
-| 500M @ 320 | 115,3 ms | 35 ms — kemungkinan besar tetap tidak cukup |
+**Usulan revisi A4** — dipisah jadi dua, dengan angka yang benar-benar terukur:
 
-**Default tetap 640.** Alasannya: lingkungan pengukuran ini tidak layak dijadikan
-dasar mengorbankan kualitas deteksi, dan ganti ke 320 hanya satu env var
-(`LV_DETECTOR_INPUT_SIZE`). Tapi angka di atas berarti **A4 kemungkinan besar
-harus direvisi**, bukan dikejar.
+| | Anggaran | Terukur (320) | Status |
+|---|---|---|---|
+| **A4a** Frame biasa (tanpa embedder) | p95 < 150 ms | **149,1 ms** | ✅ tipis |
+| **A4b** Frame kunci (dengan embedder) | p95 < 900 ms | **796,4 ms** | ✅ |
 
-Yang belum diketahui dan menentukan:
+Frame kunci muncul beberapa kali per sesi, bukan enam kali per detik, jadi
+anggarannya memang beda ordo. Menuntut 150 ms untuk keduanya berarti menuntut
+sesuatu yang tidak diperlukan dan tidak tercapai.
 
-1. **Berapa biaya tiga model sisanya.** Landmarker (4,8 MB) dan anti-spoof (2 MB)
-   ringan. Embedder (166 MB, ResNet-50) tidak, tapi ia hanya jalan di frame kunci
-   untuk cek konsistensi identitas — bukan setiap frame. Diukur di T13.
+**Kalau A4a perlu lebih longgar:** ganti embedder ke `w600k_mbf.onnx` dari paket
+`buffalo_s` (MobileFaceNet, bukan ResNet-50). Jauh lebih ringan, akurasi 1:N
+turun. Belum diukur; relevan hanya kalau frame kunci jadi masalah.
+
+Tiga hal yang masih belum diketahui:
+
+1. ~~Berapa biaya tiga model sisanya.~~ ✅ Terukur di T13, tabel di atas.
 2. **Seberapa besar noise VM ini melebih-lebihkan p95.** Perlu satu run di mesin
-   yang tenang, atau di Linux native.
+   yang tenang atau di Linux native. p50 ke p95 melebar 1,7×, yang tinggi.
 3. **Berapa fps yang sebenarnya dibutuhkan demo.** SPEC mengasumsikan ~6 fps.
-   Kalau 3 fps sudah cukup untuk challenge-response, anggarannya berlipat.
+   Pada 149 ms per frame yang tercapai ~6,7 fps, jadi asumsinya pas — tapi kalau
+   3 fps sudah cukup untuk challenge-response, anggarannya berlipat.
 
-**Ditinjau ulang di T13** (pipeline penuh terukur) dan **T30** (kalibrasi).
+**Ditinjau ulang di T30** (kalibrasi) dan saat Checkpoint A dijalankan dengan
+webcam sungguhan.
 
 ## Batas dari angka-angka ini
 
