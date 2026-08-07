@@ -1,0 +1,676 @@
+# Task List: Liveness Verifier
+
+> Turunan dari [SPEC.md](../SPEC.md) v0.2 dan [plan.md](plan.md) · Fase spec-driven: **3/4 (Tasks)** · 2026-08-07
+> **31 task · 6 fase.** Kerjakan berurutan kecuali ditandai ∥ (paralel).
+
+**Definition of Done berlaku untuk setiap task** — lihat [plan.md](plan.md#definition-of-done-berlaku-untuk-setiap-task). Tidak diulang di tiap task di bawah.
+
+Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `compose.yaml`.
+
+---
+
+## Status Implementasi
+
+| Task | Kode | Terverifikasi |
+|---|---|---|
+| T1 Skeleton + config | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T2 HTTP + healthz | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| T3 Docker + compose | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| **Checkpoint 1** | — | ✅ **LOLOS** — 2026-08-07 |
+
+### Bukti Checkpoint 1
+
+| Kriteria | Hasil |
+|---|---|
+| Compose naik healthy | `api`, `postgres`, `minio` ketiganya `healthy` |
+| `/healthz` dari host Windows | `200 {"status":"ok"}` |
+| `/v1/*` tanpa key / key salah | `401` |
+| `/v1/*` dengan key benar | `404` (lolos auth, route belum ada) |
+| `go test ./... -race -count=1` | hijau — `config` dan `httpapi` `ok` |
+| `go vet ./...` | bersih |
+| `golangci-lint run ./...` | nol issue |
+| `gofumpt -l .` | bersih |
+| Graceful shutdown | SIGTERM → keluar **1,15 detik**, exit code 0 |
+| Ukuran image runtime | **203 MB** (target < 250 MB) |
+| ONNX Runtime 1.19.2 | terunduh, `ldconfig -p` menemukan `libonnxruntime` |
+
+**Risiko R1 sebagian besar gugur.** ONNX Runtime terpasang dan ter-link di image
+`runtime` maupun `dev`. Yang belum terbukti tinggal `onnxruntime_go` benar-benar
+memuat dan menjalankan model — itu T5.
+
+### Temuan saat verifikasi
+
+**Bug nyata di router (ditemukan oleh test, sudah diperbaiki).**
+`chi.Mux.ServeHTTP` keluar lebih awal ke `NotFoundHandler` selama `mx.handler`
+masih `nil`, dan `mx.handler` baru dibangun ketika ada minimal satu route
+terdaftar. Subrouter `/v1` hanya punya `Use()` tanpa route, sehingga **seluruh
+rantai middleware — termasuk `APIKeyAuth` — dilewati** dan setiap request ke
+`/v1/*` langsung dapat 404 tanpa pemeriksaan kredensial.
+
+Perbaikannya: daftarkan handler catch-all `/*` di dalam subrouter `/v1`. Ini
+membangun rantai middleware, sekaligus menjamin seterusnya bahwa path apa pun di
+bawah `/v1` wajib punya API key sebelum bisa tahu path itu ada atau tidak. Pola
+yang lebih spesifik yang didaftarkan T20 tetap menang atas wildcard ini.
+
+**`cp` merusak rantai symlink ONNX Runtime.** `ldconfig` memperingatkan
+`libonnxruntime.so.1 is not a symbolic link`. Diganti `cp -a`.
+
+### Deviasi dari plan (disengaja, dengan alasan)
+
+1. **`deploy/Dockerfile.dev` dihapus** — stage `dev` dijadikan target di dalam
+   `deploy/Dockerfile`. Satu file berarti ONNX Runtime cukup diunduh sekali dan
+   dibagi ke stage builder, runtime, dan dev.
+2. **`deploy/docker-compose.yml` → `compose.yaml` di root** — perintah di SPEC §3
+   berbentuk `docker compose up` dari root, yang menuntut build context di root.
+3. **`deploy/.env.example` dihapus** — cukup satu `.env.example` di root. Dua file
+   konfigurasi contoh pasti akan menyimpang satu sama lain.
+4. **ONNX Runtime dipasang di T3, bukan T5** — memindahkan risiko R1 (CGO + ORT di
+   Debian slim) maju ke Checkpoint 1. Build image runtime sengaja gagal kalau
+   `ldconfig -p` tidak menemukan `libonnxruntime`. Lebih cepat tahu, lebih baik.
+5. **`LV_ONNXRUNTIME_LIB` sudah masuk config sekarang** — supaya T5 tidak perlu
+   menyentuh `internal/config` sama sekali.
+6. **testify belum dipakai** — test T1–T3 memakai `testing` dari stdlib. Dependency
+   ditambahkan saat benar-benar dibutuhkan, bukan lebih awal.
+7. **`models/README.md` ditambahkan** — menjelaskan mengapa direktorinya kosong dan
+   mengapa isinya tidak di-commit.
+8. **Cross-validation `LV_HTTP_WRITE_TIMEOUT` > `LV_HTTP_REQUEST_TIMEOUT`
+   ditambahkan** — kalau terbalik, klien melihat koneksi terputus alih-alih respons
+   timeout, dan itu sulit didiagnosis.
+
+---
+
+## Fase 1 — Walking Skeleton
+
+### T1: Skeleton repo, Go module, dan konfigurasi
+
+**Description:** Bangun kerangka repo dan paket `internal/config` yang memuat **seluruh** knob konfigurasi dari SPEC §2 dan §5 — termasuk semua threshold biometrik — sejak awal. Ini menghindari refactor besar saat kalibrasi di T30.
+
+**Acceptance criteria:**
+- [ ] `internal/config.Load()` membaca semua env var, menerapkan default eksplisit, dan mengembalikan error deskriptif (menyebut nama var) bila yang wajib kosong atau di luar rentang.
+- [ ] Seluruh threshold di SPEC §5 hadir sebagai field bertipe, bukan `map[string]string`.
+- [ ] `.env.example` memuat setiap var dengan komentar dan nilai default; tidak ada secret asli.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/config/... -race`
+- [ ] Manual: hapus satu var wajib → boot gagal dengan pesan yang menyebut nama var itu
+
+**Dependencies:** None
+**Files:** `go.mod` · `internal/config/config.go` · `internal/config/config_test.go` · `.env.example` · `.gitignore`
+**Scope:** M
+
+---
+
+### T2: HTTP server, middleware, healthz, graceful shutdown
+
+**Description:** Server chi dengan rantai middleware dan shutdown yang bersih. Belum ada endpoint domain.
+
+**Acceptance criteria:**
+- [ ] `GET /healthz` → 200 `{"status":"ok"}`; tidak butuh API key.
+- [ ] Middleware terpasang berurutan: request ID → structured logger → recover → timeout → API key. Panic jadi 500 + log, bukan proses mati.
+- [ ] `errors.go` memetakan error domain ke status HTTP dengan bentuk body seragam `{"error":{"code","message"}}`.
+- [ ] SIGTERM menutup server tanpa memutus request yang sedang berjalan, maksimal 10 detik.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/httpapi/... -race`
+- [ ] Manual: kirim SIGTERM saat request lambat berjalan → request selesai, lalu proses keluar
+
+**Dependencies:** T1
+**Files:** `cmd/server/main.go` · `internal/httpapi/router.go` · `internal/httpapi/middleware.go` · `internal/httpapi/errors.go` · `internal/httpapi/router_test.go`
+**Scope:** M
+
+---
+
+### T3: Docker — image runtime, image dev, compose
+
+**Description:** Multi-stage Dockerfile dengan CGO dan ONNX Runtime shared library, image `dev` berisi toolchain, dan compose yang menyatukan api + postgres + minio. **Ini yang membuat Go tidak perlu terpasang di Windows.**
+
+**Acceptance criteria:**
+- [ ] `docker compose up -d --build` → semua service `healthy`, `/healthz` menjawab dari host Windows.
+- [ ] `docker compose run --rm dev go test ./...` jalan tanpa Go terpasang di host.
+- [ ] `libonnxruntime.so` ada di image runtime dan ditemukan oleh dynamic linker (`ldconfig -p` menemukannya).
+- [ ] Image runtime < 250 MB tanpa model; model di-mount dari `./models`, tidak di-bake.
+
+**Verification:**
+- [ ] `docker compose up -d --build && curl -s localhost:8080/healthz`
+- [ ] `docker compose run --rm dev go test ./... -race`
+- [ ] `docker images liveness-verifier:local --format "{{.Size}}"`
+
+**Dependencies:** T2
+**Files:** `deploy/Dockerfile` · `deploy/Dockerfile.dev` · `deploy/docker-compose.yml` · `deploy/.env.example` · `README.md`
+**Scope:** M
+
+> ### ✅ Checkpoint 1 — Walking Skeleton
+> - [ ] Compose naik healthy dari cache kosong < 5 menit
+> - [ ] `/healthz` menjawab dari host Windows
+> - [ ] Test dan lint hijau di container dev
+> - [ ] Graceful shutdown terbukti
+> - [ ] **Tinjau bersama sebelum lanjut**
+
+---
+
+## Fase 2 — Inference Spike ⚠ RISIKO TERTINGGI
+
+### T4: modelctl — unduh dan verifikasi model
+
+**Description:** CLI yang mengambil kelima model ONNX ke `./models`, memverifikasi SHA-256, dan mencatat lisensi tiap model. Tanpa ini, setup tidak reproducible.
+
+**Acceptance criteria:**
+- [ ] `modelctl download` mengunduh sesuai `manifest.json`, memverifikasi SHA-256, dan idempoten — melewati file yang sudah ada dan valid.
+- [ ] `modelctl verify` keluar dengan kode non-zero bila ada file hilang atau checksum tidak cocok.
+- [ ] `manifest.json` mencatat nama, URL, SHA-256, ukuran, dan **lisensi** tiap model (lihat Risiko R2).
+- [ ] Unduhan terputus tidak meninggalkan file rusak — tulis ke `.tmp`, rename setelah verifikasi.
+
+**Verification:**
+- [ ] `docker compose --profile setup run --rm modelctl download`
+- [ ] Manual: rusakkan 1 byte di satu file → `modelctl verify` gagal dan menyebut file itu
+
+**Dependencies:** T1
+**Files:** `cmd/modelctl/main.go` · `cmd/modelctl/download.go` · `cmd/modelctl/download_test.go` · `models/manifest.json`
+**Scope:** M
+
+---
+
+### T5: ⚠ Bootstrap ONNX Runtime + session pool
+
+**Description:** **Task paling berisiko di seluruh project.** Inisialisasi environment ORT, muat model, dan sediakan pool session yang aman untuk konkurensi. `*ort.Session` tidak thread-safe — pool bukan optimasi, tapi syarat kebenaran.
+
+**Acceptance criteria:**
+- [ ] Environment ORT terinisialisasi di dalam container runtime; kegagalan memuat model gagal saat **boot**, bukan saat request pertama.
+- [ ] Pool `chan *Session` berukuran konfigurasi; `Acquire` menghormati pembatalan context; `Release` selalu mengembalikan session bahkan saat panic.
+- [ ] Teardown melepas semua session dan environment tanpa kebocoran.
+- [ ] Test konkurensi: 100 goroutine × 50 inferensi lolos `-race` bersih.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/biometric/onnx/... -race -count=3`
+- [ ] Manual: `docker compose up` dengan satu model dihapus → boot gagal, pesan menyebut model itu
+
+**Dependencies:** T3, T4
+**Files:** `internal/biometric/onnx/runtime.go` · `internal/biometric/onnx/runtime_test.go` · `deploy/Dockerfile` (edit)
+**Scope:** M
+
+> **Kalau task ini gagal:** hentikan pekerjaan fitur. Coba berurutan — (a) `debian:bookworm` penuh alih-alih slim, (b) base image ONNX Runtime resmi, (c) eskalasi ke saya untuk keputusan sidecar Python. Jangan menambal dengan `LD_LIBRARY_PATH` yang menutupi masalah sesungguhnya.
+
+---
+
+### T6: Detektor wajah SCRFD + golden test
+
+**Description:** Implementasi pertama yang menghasilkan sesuatu bermakna: bounding box + 5 keypoint. Menetapkan pola port/adapter untuk tiga model berikutnya.
+
+**Acceptance criteria:**
+- [ ] `biometric.Detector` didefinisikan di `ports.go`; `internal/biometric` **tidak** mengimpor `onnxruntime_go`.
+- [ ] Pre-processing (letterbox resize, normalisasi) dan post-processing (decode anchor, NMS) benar; bbox pada fixture cocok dengan golden file dalam toleransi ±2 px.
+- [ ] Mengembalikan `ErrNoFaceFound` bila tidak ada wajah, dan wajah terbesar bila ada beberapa.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/biometric/... -race`
+- [ ] Golden test lolos pada minimal 5 gambar fixture
+
+**Dependencies:** T5
+**Files:** `internal/biometric/types.go` · `internal/biometric/ports.go` · `internal/biometric/onnx/detector_scrfd.go` · `internal/biometric/onnx/detector_scrfd_test.go` · `testdata/golden/scrfd.json`
+**Scope:** M
+
+---
+
+### T7: Paket imaging — decode, quality, align, pHash ∥
+
+**Description:** Utilitas gambar murni Go tanpa OpenCV. Bisa dikerjakan paralel dengan T4–T6.
+
+**Acceptance criteria:**
+- [ ] Decode JPEG/PNG dengan batas ukuran byte **dan** dimensi; menolak file rusak tanpa panic; menghormati orientasi EXIF.
+- [ ] Gerbang kualitas: variance Laplacian (blur), rata-rata brightness, lebar wajah minimum — semua ambang dari config.
+- [ ] Alignment similarity transform 5 titik ke template 112×112 sesuai konvensi ArcFace.
+- [ ] pHash 64-bit + jarak Hamming; dua frame webcam berturut-turut dari adegan statis berjarak < 5.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/imaging/... -race`
+- [ ] Fuzz singkat pada decoder: `go test -fuzz=FuzzDecode -fuzztime=30s ./internal/imaging/`
+
+**Dependencies:** T1 ∥ (paralel dengan T4–T6)
+**Files:** `internal/imaging/decode.go` · `internal/imaging/quality.go` · `internal/imaging/align.go` · `internal/imaging/phash.go` · `internal/imaging/imaging_test.go`
+**Scope:** M
+
+---
+
+### T8: CLI bench — bukti end-to-end
+
+**Description:** Task kecil dengan nilai besar: membuktikan seluruh tumpukan ONNX bekerja di Docker, dan menetapkan baseline latensi untuk kriteria A4.
+
+**Acceptance criteria:**
+- [ ] `bench -images <dir>` memproses tiap gambar dan mencetak bbox + latensi.
+- [ ] Melaporkan p50/p95/p99 dan jumlah core yang dipakai.
+- [ ] Keluar non-zero bila ada gambar gagal diproses.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go run ./cmd/bench -images testdata/faces`
+- [ ] Catat p95 di `tasks/baseline.md` sebagai pembanding A4
+
+**Dependencies:** T6, T7
+**Files:** `cmd/bench/main.go` · `tasks/baseline.md`
+**Scope:** S
+
+> ### ⚠️ Checkpoint 2 — GATE RISIKO
+> - [ ] SCRFD mendeteksi wajah **di dalam Docker**, bukan hanya di test
+> - [ ] Session pool lolos `-race` di bawah konkurensi
+> - [ ] `modelctl verify` menolak file rusak
+> - [ ] Baseline p95 tercatat
+> - [ ] **BERHENTI. Tinjau bersama.** Kalau gate ini gagal, arsitektur harus ditinjau ulang sebelum kode domain apa pun ditulis.
+
+---
+
+## Fase 3 — Biometric Pipeline
+
+### T9: Landmark 106 titik + metrik EAR/MAR
+
+**Acceptance criteria:**
+- [ ] 106 landmark dihasilkan dalam koordinat gambar, bukan koordinat crop.
+- [ ] EAR (Eye Aspect Ratio) dan MAR (Mouth Aspect Ratio) dihitung dari indeks landmark yang **dikonstantakan dan diberi komentar** — bukan angka telanjang di tengah rumus.
+- [ ] Unit test memakai landmark sintetis dengan nilai EAR/MAR yang diketahui; mata tertutup < 0.21, terbuka > 0.30.
+
+**Verification:** `docker compose run --rm dev go test ./internal/biometric/... -race`
+**Dependencies:** T6, T7
+**Files:** `internal/biometric/onnx/landmarker_2d106.go` · `internal/biometric/metrics.go` · `internal/biometric/metrics_test.go` · `internal/biometric/onnx/landmarker_2d106_test.go`
+**Scope:** M
+
+---
+
+### T10: Head pose lewat PnP
+
+**Acceptance criteria:**
+- [ ] Yaw/pitch/roll dalam derajat dari 106 landmark, memakai model wajah kanonik 3D dan PnP (gonum).
+- [ ] Rotasi sintetis yang diketahui dipulihkan dalam ±5° untuk yaw ∈ [-45°, +45°].
+- [ ] Konvensi tanda didokumentasikan: yaw positif = kepala menoleh ke **kanan subjek**.
+
+**Verification:** `docker compose run --rm dev go test ./internal/biometric/ -run TestPose -race`
+**Dependencies:** T9
+**Files:** `internal/biometric/pose.go` · `internal/biometric/pose_test.go`
+**Scope:** S
+
+---
+
+### T11: Anti-spoof pasif (MiniFASNetV2) ∥
+
+**Acceptance criteria:**
+- [ ] Menghasilkan skor real/spoof kalibrasi [0,1] dari crop wajah yang sudah di-align.
+- [ ] Golden test pada fixture asli **dan** fixture serangan cetak.
+- [ ] Skor tidak pernah di-hardcode di jalur keputusan — ambang dari config.
+
+**Verification:** `docker compose run --rm dev go test ./internal/biometric/onnx/ -run TestAntiSpoof -race`
+**Dependencies:** T5, T7 ∥ (paralel dengan T9, T12)
+**Files:** `internal/biometric/onnx/antispoof_minifas.go` · `internal/biometric/onnx/antispoof_minifas_test.go`
+**Scope:** S
+
+---
+
+### T12: Embedder ArcFace ∥
+
+**Acceptance criteria:**
+- [ ] Vektor 512-dimensi, ter-L2-normalisasi (norma = 1.0 ± 1e-5).
+- [ ] Dua foto orang yang sama → cosine > 0.6; orang berbeda → < 0.3 pada fixture.
+- [ ] Input harus crop 112×112 hasil alignment T7; menolak ukuran lain secara eksplisit.
+
+**Verification:** `docker compose run --rm dev go test ./internal/biometric/onnx/ -run TestEmbedder -race`
+**Dependencies:** T5, T7 ∥ (paralel dengan T9, T11)
+**Files:** `internal/biometric/onnx/embedder_arcface.go` · `internal/biometric/onnx/embedder_arcface_test.go`
+**Scope:** S
+
+---
+
+### T13: Orkestrator Pipeline + stub deterministik
+
+**Description:** Menyatukan keempat model menjadi satu panggilan, **dan** menyediakan stub yang menurunkan output dari hash gambar. Stub inilah yang membuat seluruh Fase 4 dan 5 bisa dikembangkan tanpa file model.
+
+**Acceptance criteria:**
+- [ ] `Pipeline.Analyze(ctx, img)` → `Face{BBox, Landmarks, Pose, EAR, MAR, SpoofScore, Embedding, Quality}`.
+- [ ] Gerbang kualitas memotong lebih awal — tidak menjalankan embedder pada frame buram; menghemat latensi.
+- [ ] Stub deterministik: gambar yang sama selalu menghasilkan `Face` yang sama; gambar berbeda menghasilkan embedding berbeda yang stabil.
+- [ ] Stub dan implementasi ONNX memenuhi interface yang **persis sama**; ditukar lewat config.
+
+**Verification:**
+- [ ] `docker compose run --rm dev go test ./internal/biometric/... -race`
+- [ ] `docker compose run --rm dev go test ./... -race` lolos **dengan direktori models kosong** (memakai stub)
+
+**Dependencies:** T9, T10, T11, T12
+**Files:** `internal/biometric/pipeline.go` · `internal/biometric/pipeline_test.go` · `internal/biometric/stub/stub.go` · `internal/biometric/stub/stub_test.go`
+**Scope:** M
+
+> ### ✅ Checkpoint 3 — Biometric Pipeline
+> - [ ] Golden test keempat model lolos
+> - [ ] Pose pulih ±5° pada rotasi sintetis
+> - [ ] Cosine embedding memisahkan identitas sesuai ambang
+> - [ ] **Seluruh test suite lolos tanpa file model** (jalur stub)
+> - [ ] Tinjau bersama sebelum lanjut
+
+---
+
+## Fase 4 — Milestone A: Active Liveness
+
+### T14: Postgres, goose, migrasi awal ∥
+
+**Acceptance criteria:**
+- [ ] Pool pgx dengan health check dan batas koneksi dari config.
+- [ ] Migrasi goose di-embed ke binary; dijalankan lewat perintah eksplisit, **bukan** otomatis saat boot.
+- [ ] `up` → `down` → `up` bersih pada database kosong (kriteria X5).
+- [ ] Ekstensi `vector` dibuat di migrasi pertama.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestMigrations`
+**Dependencies:** T3 ∥ (paralel dengan T16)
+**Files:** `internal/storage/postgres/db.go` · `migrations/00001_init_extensions.sql` · `migrations/00002_liveness_sessions.sql` · `tests/integration/migrate_test.go`
+**Scope:** M
+
+---
+
+### T15: Repository sesi
+
+**Acceptance criteria:**
+- [ ] Create/Get/Update/Delete sesi; update memakai optimistic locking untuk mencegah lost update dari frame konkuren.
+- [ ] `DeleteExpired` membersihkan sesi kedaluwarsa; test membuktikan sesi kedaluwarsa hilang.
+- [ ] Test integrasi terhadap Postgres asli lewat testcontainers, bukan mock.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestSessionRepo`
+**Dependencies:** T14
+**Files:** `internal/storage/postgres/session_repo.go` · `tests/integration/session_repo_test.go`
+**Scope:** M
+
+---
+
+### T16: Entity sesi, generator challenge, state machine ∥
+
+**Description:** Jantung domain. Go murni, tanpa I/O, tanpa model. Bisa dikerjakan paralel dengan seluruh Fase 3.
+
+**Acceptance criteria:**
+- [ ] 3 challenge dipilih acak dari 5 jenis (BLINK, TURN_LEFT, TURN_RIGHT, NOD, MOUTH_OPEN) tanpa pengulangan, urutan diacak per sesi.
+- [ ] Transisi state hanya sepanjang sisi yang legal: `PENDING → IN_PROGRESS → {PASSED, FAILED, EXPIRED}`. Transisi ilegal mengembalikan error, bukan panic dan bukan diabaikan diam-diam.
+- [ ] Kedaluwarsa dikendalikan interface `Clock` yang bisa di-fake — tidak ada `time.Now()` di dalam domain.
+- [ ] Table-driven test mencakup **setiap** transisi legal dan minimal 5 transisi ilegal.
+
+**Verification:** `docker compose run --rm dev go test ./internal/liveness/... -race -cover` (≥ 90% untuk file-file ini)
+**Dependencies:** T1 ∥ (paralel dengan Fase 3)
+**Files:** `internal/liveness/session.go` · `internal/liveness/challenge.go` · `internal/liveness/session_test.go` · `internal/liveness/challenge_test.go`
+**Scope:** M
+
+---
+
+### T17: Evaluator challenge
+
+**Acceptance criteria:**
+- [ ] BLINK: EAR < ambang selama ≥ 2 frame berturut, **diikuti pemulihan** di atas ambang — mencegah mata terpejam terus dihitung sebagai kedipan.
+- [ ] TURN_LEFT/RIGHT: |yaw| > ambang dengan tanda yang benar; NOD: delta pitch; MOUTH_OPEN: MAR > ambang.
+- [ ] Setiap challenge punya batas waktunya sendiri; lewat batas → sesi FAILED dengan alasan yang jelas.
+- [ ] Seluruh ambang dari config; nol angka ajaib.
+
+**Verification:** `docker compose run --rm dev go test ./internal/liveness/ -run TestEvaluator -race`
+**Dependencies:** T16, T10
+**Files:** `internal/liveness/evaluator.go` · `internal/liveness/evaluator_test.go`
+**Scope:** M
+
+---
+
+### T18: Anti-replay — 6 lapis pertahanan
+
+**Description:** Implementasikan keenam pertahanan di SPEC §5. Ini permukaan keamanan inti sistem.
+
+**Acceptance criteria:**
+- [ ] Keenam lapis aktif: challenge acak, nonce + seq monoton, batas waktu, dedup pHash, anti-spoof per frame, konsistensi identitas lintas frame.
+- [ ] **Setiap lapis punya test kasus-gagal tersendiri** yang membuktikan serangan ditolak.
+- [ ] Cek identitas: embedding frame kunci harus cosine ≥ ambang terhadap frame pertama; kalau tidak → `ErrIdentityChanged`.
+- [ ] Penolakan mencatat alasan terstruktur — tanpa data biometrik apa pun di log.
+
+**Verification:** `docker compose run --rm dev go test ./internal/liveness/ -run TestAntiReplay -race -cover` (≥ 90%)
+**Dependencies:** T16, T7, T12
+**Files:** `internal/liveness/antireplay.go` · `internal/liveness/antireplay_test.go`
+**Scope:** M
+
+---
+
+### T19: liveness.Service
+
+**Acceptance criteria:**
+- [ ] `Start` / `SubmitFrame` / `Complete` / `Get` sesuai kontrak SPEC §5.
+- [ ] Frame berkualitas rendah **tidak** menggagalkan sesi — mengembalikan alasan, klien mencoba lagi. Hanya spoof dan pergantian identitas yang fatal.
+- [ ] `Complete` menolak sesi yang belum menuntaskan semua challenge.
+- [ ] Semua dependency lewat interface; test memakai pipeline stub dan repo fake.
+
+**Verification:** `docker compose run --rm dev go test ./internal/liveness/... -race -cover` (≥ 80% paket)
+**Dependencies:** T13, T15, T17, T18
+**Files:** `internal/liveness/service.go` · `internal/liveness/service_test.go`
+**Scope:** M
+
+---
+
+### T20: Handler HTTP liveness
+
+**Acceptance criteria:**
+- [ ] Keempat endpoint liveness dari SPEC §5 lengkap dengan bentuk request/response yang tepat.
+- [ ] Frame base64 > 2 MB → 413 lewat `MaxBytesReader`, bukan setelah decode.
+- [ ] Error domain terpetakan benar: expired → 410, replay → 409, spoof → 422, tidak ketemu → 404.
+- [ ] Rate limit per API key aktif di endpoint frame.
+
+**Verification:** `docker compose run --rm dev go test ./internal/httpapi/... -race` + `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestLivenessAPI`
+**Dependencies:** T19, T2
+**Files:** `internal/httpapi/liveness_handler.go` · `internal/httpapi/dto.go` · `internal/httpapi/liveness_handler_test.go` · `internal/httpapi/router.go` (edit)
+**Scope:** M
+
+---
+
+### T21: Demo web UI ∥
+
+**Description:** Halaman tunggal, vanilla JS, tanpa npm. Ini yang mengubah Milestone A dari "test hijau" menjadi "saya melihatnya bekerja". Boleh paralel dengan T20 setelah DTO dibekukan.
+
+**Acceptance criteria:**
+- [ ] Meminta akses kamera, memulai sesi, menampilkan instruksi challenge aktif dalam Bahasa Indonesia.
+- [ ] Mengambil dan mengirim frame ~6 fps, menampilkan progres, merender verdict akhir.
+- [ ] Menangani kamera ditolak, sesi kedaluwarsa, dan error jaringan dengan pesan yang bisa dimengerti — bukan console error.
+- [ ] Aset di-embed via `//go:embed`; tidak ada CDN eksternal, tidak ada build step.
+
+**Verification:**
+- [ ] Manual: buka `http://localhost:8080/demo` di Chrome dan Edge, selesaikan sesi penuh
+- [ ] Manual: tolak izin kamera → pesan jelas, bukan halaman kosong
+
+**Dependencies:** T20 (kontrak DTO)
+**Files:** `web/index.html` · `web/app.js` · `web/style.css` · `internal/httpapi/web.go`
+**Scope:** M
+
+> ### 🎯 CHECKPOINT A — MILESTONE A
+> Verifikasi SPEC §9 A1–A8:
+> - [ ] A1 compose naik healthy < 5 menit dari cache kosong
+> - [ ] A2 `/readyz` melaporkan DB, MinIO, dan 4 model ter-load
+> - [ ] A3 **Demo webcam menuntaskan sesi 3-challenge, verdict < 2 detik**
+> - [ ] A4 p95 inference per frame < 150 ms di CPU 4 core
+> - [ ] A5 serangan cetak ditolak
+> - [ ] A6 serangan replay gagal karena urutan challenge acak
+> - [ ] A7 frame duplikat, seq mundur, pergantian identitas ditolak dengan kode tepat
+> - [ ] A8 sesi kedaluwarsa di 90 detik dan dibersihkan dari DB
+> - [ ] X5 migrasi up→down→up bersih
+> - [ ] Seluruh test lolos dengan stub, tanpa model
+> - [ ] **Tinjau bersama. Ini titik keputusan alami untuk berhenti atau lanjut ke Milestone B.**
+
+---
+
+## Fase 5 — Milestone B: Enrollment & 1:N
+
+### T22: Skema pgvector, face repo, index HNSW
+
+**Acceptance criteria:**
+- [ ] Kolom `vector(512)` dengan index HNSW `vector_cosine_ops`; parameter `m` dan `ef_construction` dari config.
+- [ ] Codec pgvector terdaftar di pgx; embedding bolak-balik tanpa kehilangan presisi.
+- [ ] Top-K search mengembalikan kandidat terurut beserta cosine similarity.
+- [ ] Harness benchmark: 10.000 embedding sintetis, mengukur p95 dan recall@1 vs brute force (B2, B3).
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestFaceRepo -timeout=10m`
+**Dependencies:** T14
+**Files:** `migrations/00003_faces_pgvector.sql` · `internal/storage/postgres/face_repo.go` · `internal/storage/postgres/vector_codec.go` · `tests/integration/face_repo_test.go`
+**Scope:** M
+
+---
+
+### T23: Object store MinIO ∥
+
+**Acceptance criteria:**
+- [ ] Put/Get/Delete dengan kunci content-addressed (SHA-256 dari isi), mencegah duplikasi.
+- [ ] Bucket dibuat otomatis saat boot bila belum ada; kebijakan **privat**, tidak ada akses anonim.
+- [ ] Delete idempoten; menghapus objek yang tidak ada bukan error.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestObjStore`
+**Dependencies:** T3 ∥ (paralel dengan T22)
+**Files:** `internal/storage/objstore/minio.go` · `tests/integration/objstore_test.go`
+**Scope:** M
+
+---
+
+### T24: Liveness token — terbitkan dan pakai sekali
+
+**Description:** Pengikat antara Milestone A dan B. Tanpa ini, enrollment bisa dilakukan dengan foto biasa dan seluruh sistem liveness jadi teater.
+
+**Acceptance criteria:**
+- [ ] Token ditandatangani, ber-TTL pendek (5 menit), terikat pada `session_id` dan verdict PASSED.
+- [ ] **Sekali pakai** — konsumsi kedua gagal, dijamin di level database, bukan di memori (B1).
+- [ ] Token dari sesi FAILED atau EXPIRED ditolak.
+- [ ] Signature tidak valid ditolak tanpa membocorkan alasan ke klien.
+
+**Verification:** `docker compose run --rm dev go test ./internal/liveness/ -run TestToken -race` + test integrasi konsumsi ganda
+**Dependencies:** T19, T14
+**Files:** `internal/liveness/token.go` · `internal/liveness/token_test.go` · `migrations/00004_liveness_tokens.sql`
+**Scope:** M
+
+---
+
+### T25: enrollment.Service
+
+**Acceptance criteria:**
+- [ ] `Enroll` **wajib** menerima liveness token yang valid dan belum terpakai; menyimpan embedding + artefak dan mengembalikan `subject_id`.
+- [ ] `Search` 1:N mengembalikan top-K + similarity + flag `match` terhadap ambang config.
+- [ ] `Verify` 1:1 adalah Search yang difilter ke satu subject — bukan jalur kode terpisah.
+- [ ] `Delete` menghapus embedding **dan** objek MinIO, dan menyisakan baris audit (B4).
+- [ ] Kegagalan parsial (DB berhasil, MinIO gagal) tidak meninggalkan data yatim — urutan operasi didokumentasikan dan di-test.
+
+**Verification:** `docker compose run --rm dev go test ./internal/enrollment/... -race -cover` (≥ 80%)
+**Dependencies:** T22, T23, T24, T13
+**Files:** `internal/enrollment/service.go` · `internal/enrollment/threshold.go` · `internal/enrollment/service_test.go`
+**Scope:** M
+
+---
+
+### T26: Handler HTTP faces
+
+**Acceptance criteria:**
+- [ ] Kelima endpoint faces dari SPEC §5.
+- [ ] Response **tidak pernah** memuat vektor embedding mentah.
+- [ ] `subject_id` tidak pernah muncul di query string — body atau path parameter saja.
+- [ ] Enroll tanpa token valid → 403 dengan pesan yang jelas.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestFacesAPI`
+**Dependencies:** T25, T20
+**Files:** `internal/httpapi/faces_handler.go` · `internal/httpapi/dto.go` (edit) · `internal/httpapi/faces_handler_test.go`
+**Scope:** M
+
+---
+
+### T27: Audit log
+
+**Acceptance criteria:**
+- [ ] Setiap keputusan verifikasi dan enrollment menulis baris audit: timestamp, session/subject id, verdict, skor, referensi artefak (B5).
+- [ ] Baris audit **append-only**; tidak ada jalur update atau delete di repository.
+- [ ] Audit menyimpan **referensi**, bukan data biometrik.
+- [ ] Delete subject menyisakan jejak audit yang membuktikan penghapusan terjadi.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestAudit`
+**Dependencies:** T14, T19, T25
+**Files:** `migrations/00005_audit_log.sql` · `internal/storage/postgres/audit_repo.go` · `tests/integration/audit_test.go` · wiring di service (edit)
+**Scope:** M
+
+> ### 🎯 CHECKPOINT B — MILESTONE B
+> Verifikasi SPEC §9 B1–B5:
+> - [ ] B1 enrollment menolak request tanpa liveness token valid & belum terpakai
+> - [ ] B2 1:N pada 10.000 embedding, p95 < 50 ms
+> - [ ] B3 recall@1 HNSW ≥ 0.98 vs brute force
+> - [ ] B4 delete menghapus embedding + objek MinIO, audit tersisa
+> - [ ] B5 setiap keputusan dapat ditelusuri lengkap
+> - [ ] **Tinjau bersama**
+
+---
+
+## Fase 6 — Hardening
+
+### T28: Suite regresi serangan
+
+**Acceptance criteria:**
+- [ ] Serangan cetak, replay layar, frame duplikat, seq mundur, dan pergantian identitas mid-sesi — semuanya ditolak (A5, A6, A7).
+- [ ] Sampel serangan disimpan di `testdata/attacks/`, **tanpa wajah orang sungguhan** — sintetis atau CC0.
+- [ ] Setiap serangan yang gagal ditolak mencetak diagnostik yang cukup untuk debugging.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run TestAttack -v`
+**Dependencies:** Checkpoint A
+**Files:** `tests/integration/attack_test.go` · `testdata/attacks/` · `testdata/attacks/README.md`
+**Scope:** M
+
+---
+
+### T29: Observability, readyz, penjaga kebocoran log
+
+**Acceptance criteria:**
+- [ ] `/readyz` mengecek DB, MinIO, dan model ter-load; 503 dengan detail per komponen saat ada yang mati (A2).
+- [ ] Test menangkap seluruh output `slog` di sepanjang alur penuh dan memastikan **tidak ada** blob base64, path gambar, atau angka embedding (X4).
+- [ ] `request_id` dan `session_id` hadir di setiap baris log jalur request.
+
+**Verification:** `docker compose run --rm dev go test -tags=integration ./tests/integration/ -run "TestReadyz|TestLogLeak"`
+**Dependencies:** T20, T26
+**Files:** `internal/httpapi/health.go` · `internal/obs/logging.go` · `tests/integration/logleak_test.go`
+**Scope:** M
+
+---
+
+### T30: Harness kalibrasi threshold ⛔
+
+**Description:** Mengubah threshold dari tebakan literatur menjadi angka terukur. **Terblokir Open Question #2 (target FAR/FRR) dan #3 (dataset).**
+
+**Acceptance criteria:**
+- [ ] `calibrate -dataset <dir>` menghasilkan kurva FAR/FRR dan ambang optimal per parameter.
+- [ ] Output berupa blok env var yang bisa langsung ditempel ke `.env`.
+- [ ] `docs/calibration.md` mencatat dataset, tanggal, versi model, dan angka hasil.
+
+**Verification:** `docker compose run --rm dev go run ./cmd/calibrate -dataset testdata/calibration`
+**Dependencies:** Checkpoint B · **Open Q#2, Q#3**
+**Files:** `cmd/calibrate/main.go` · `docs/calibration.md`
+**Scope:** M
+
+---
+
+### T31: README dan verifikasi akhir
+
+**Acceptance criteria:**
+- [ ] README memungkinkan orang lain menjalankan project dari nol dalam < 10 menit (X6).
+- [ ] Mendokumentasikan batasan secara jujur: bukan tersertifikasi PAD, threshold status kalibrasinya, lisensi model.
+- [ ] Menjelaskan bahwa demo hanya jalan di `localhost` (secure context), bukan lewat IP LAN.
+- [ ] SPEC.md diperbarui: open question yang sudah terjawab ditutup, riwayat revisi ditambah.
+
+**Verification:**
+- [ ] Manual: jalankan ulang di direktori bersih hanya mengikuti README
+- [ ] `docker compose run --rm dev go test ./... -race && golangci-lint run ./...`
+
+**Dependencies:** T28, T29, T30
+**Files:** `README.md` · `SPEC.md` (edit) · `docs/limitations.md`
+**Scope:** S
+
+> ### ✅ CHECKPOINT SELESAI
+> - [ ] X1 `go test ./... -race` bersih
+> - [ ] X2 coverage domain ≥ 80%, repo ≥ 70%
+> - [ ] X3 `golangci-lint run ./...` nol issue
+> - [ ] X4 test membuktikan tidak ada kebocoran gambar/embedding ke log
+> - [ ] X5 migrasi up→down→up bersih
+> - [ ] X6 README terbukti di mesin bersih
+> - [ ] Semua kriteria A1–A8 dan B1–B5 hijau
+
+---
+
+## Ringkasan Ukuran
+
+| Fase | Task | Ukuran | Catatan |
+|---|---|---|---|
+| 1 Walking Skeleton | T1–T3 | 3×M | |
+| 2 Inference Spike | T4–T8 | 4×M, 1×S | **T5 gate risiko** |
+| 3 Biometric Pipeline | T9–T13 | 2×M, 3×S | T11 ∥ T12 |
+| 4 Milestone A | T14–T21 | 8×M | T16 bisa mulai lebih awal |
+| 5 Milestone B | T22–T27 | 6×M | |
+| 6 Hardening | T28–T31 | 3×M, 1×S | T30 terblokir Open Q#2/#3 |
+
+**Total: 31 task.** Tidak ada yang berukuran L atau lebih. Tidak ada yang menyentuh lebih dari 5 file.
