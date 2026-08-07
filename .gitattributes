@@ -1,0 +1,13 @@
+# Seluruh isi repo ini di-build dan dijalankan di dalam container Linux.
+# Kalau Git mengubah baris jadi CRLF saat checkout di Windows, Dockerfile dan
+# skrip shell bisa gagal dengan cara yang sulit didiagnosis. Jadi semua file
+# teks disimpan dan di-checkout dengan LF, termasuk di Windows.
+* text=auto eol=lf
+
+# File biner tidak boleh disentuh sama sekali.
+*.onnx  binary
+*.zip   binary
+*.tgz   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
