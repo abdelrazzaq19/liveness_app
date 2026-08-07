@@ -21,7 +21,64 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | **T5 ⚠ ORT bootstrap** | ✅ selesai | ✅ **GATE LOLOS** — 2026-08-07 |
 | T6 detektor SCRFD | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T7 imaging | ✅ selesai | ✅ **lolos** — 2026-08-07 |
-| T8 bench CLI | ⬜ berikutnya | — |
+| T8 bench CLI | ✅ selesai | ✅ **lolos** — 2026-08-07 |
+| **Checkpoint 2** | — | ✅ **GATE LOLOS** — 2026-08-07 |
+
+### Bukti T8
+
+| Kriteria | Hasil |
+|---|---|
+| `bench` memproses tiap gambar, cetak bbox + latensi | ✅ mode `-v` |
+| Melaporkan p50/p95/p99 dan jumlah core | ✅ plus min/max/mean dan throughput |
+| Keluar non-zero bila ada gambar gagal | ✅ "tidak ada wajah" bukan kegagalan, error decode/inferensi iya |
+| Baseline tercatat | ✅ [baseline.md](baseline.md) |
+
+### ⚠️ Koreksi penting dari T8
+
+**Angka benchmark T6 saya salah.** Diambil dengan `-benchtime 5x`/`10x` di
+lingkungan yang ternyata sangat bising — rentang min-ke-p99 mencapai **3,3×** pada
+beban identik.
+
+| | Dilaporkan T6 | Sebenarnya (60 sampel) |
+|---|---|---|
+| SCRFD-500M @ 640 | 73 ms | **131,9 ms p50 · 256,6 ms p95** |
+| SCRFD-10GF @ 320 | 116 ms | **305,8 ms p50 · 477,2 ms p95** |
+
+Bench CLI dan benchmark Go sekarang sepakat dalam **0,6 ms** satu sama lain pada
+beban yang sama, jadi kedua alat benar — ukuran sampelnya yang salah.
+
+**Keputusan ganti model tetap berlaku.** Perbandingannya bertahan karena keduanya
+diukur di kondisi sama; hanya besaran mutlaknya yang bergeser.
+
+**Tapi kriteria A4 tidak terpenuhi.** Target p95 < 150 ms untuk pipeline penuh,
+sementara detektor saja sudah 256 ms p95 di 640 (115 ms di 320). Tiga model lain
+belum dihitung. Analisis lengkap dan tiga hal yang belum diketahui ada di
+[baseline.md](baseline.md). **Ditinjau ulang di T13.**
+
+Default tetap 640: lingkungan pengukuran ini tidak layak dijadikan dasar
+mengorbankan kualitas deteksi, dan pindah ke 320 hanya satu env var.
+
+### Deviasi T8
+
+**Mode `-synthetic` ditambahkan.** Repo ini tidak memuat foto wajah, jadi tanpa
+mode ini alatnya tidak bisa dijalankan sama sekali di checkout bersih. Adegan
+sintetis mengukur throughput dengan jujur — model mengerjakan jumlah kerja yang
+sama apa pun isi gambarnya — tapi tidak mengatakan apa pun soal kualitas deteksi.
+
+---
+
+> ## 🎯 Checkpoint 2 — GATE RISIKO: LOLOS
+>
+> - [x] SCRFD mendeteksi wajah **di dalam Docker**, bukan hanya di test
+> - [x] Session pool lolos `-race` di bawah konkurensi (100 goroutine × 50)
+> - [x] `modelctl verify` menolak file rusak
+> - [x] Baseline p95 tercatat di [baseline.md](baseline.md)
+>
+> **Arsitektur satu-container bertahan.** ONNX Runtime memuat dan menjalankan
+> model dari container Debian slim; tidak perlu mundur ke sidecar Python.
+>
+> Yang terbawa ke fase berikutnya: **A4 kemungkinan besar harus direvisi**, dan
+> **Open Question #9** (model anti-spoof tanpa rilis ONNX) memblokir T11.
 
 ### Bukti T7
 
@@ -113,20 +170,16 @@ Tiga kesimpulan:
 
 ### ✅ Keputusan: ganti ke SCRFD-500M (2026-08-07)
 
-Diukur setelah `buffalo_s` masuk manifest:
+> ⚠️ **Angka di bagian ini digantikan.** Diukur dengan `-benchtime 5x`/`10x` —
+> terlalu sedikit sampel di mesin yang bising. Lihat [baseline.md](baseline.md)
+> untuk angka 60-sampel yang menggantikannya, dan T8 di bawah untuk koreksinya.
+> Kesimpulan **ganti model tetap berlaku**; besaran mutlaknya yang salah.
 
-| Model | 640×640 | 480×480 | 320×320 |
-|---|---|---|---|
-| **SCRFD-500M** | **73 ms** | 49 ms | 33 ms |
-| SCRFD-10GF | 327 ms | 216 ms | 116 ms |
+**Ternyata bukan trade-off sama sekali.** SCRFD-500M di resolusi penuh mengalahkan
+SCRFD-10GF di seperempat resolusi, jadi resolusi tidak perlu dikorbankan demi
+kecepatan.
 
-**Ternyata bukan trade-off sama sekali.** SCRFD-500M di resolusi penuh 640
-(73 ms) lebih cepat daripada SCRFD-10GF di seperempat resolusi 320 (116 ms).
-Jadi kita dapat resolusi lebih tinggi **dan** latensi lebih rendah — kekhawatiran
-"wajah kecil jadi sulit terdeteksi" tidak perlu dibayar.
-
-Default sekarang: `det_500m.onnx` di `LV_DETECTOR_INPUT_SIZE=640`. Menyisakan
-~77 ms dari anggaran 150 ms untuk landmarker, anti-spoof, dan embedder.
+Default sekarang: `det_500m.onnx` di `LV_DETECTOR_INPUT_SIZE=640`.
 
 Perubahan yang menyertainya:
 

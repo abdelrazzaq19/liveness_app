@@ -68,14 +68,16 @@ Rekomendasi saya: **kerjakan berurutan** — Milestone A (liveness) harus jalan 
 
 Model diambil dari dua paket InsightFace: **`buffalo_l.zip`** (275 MB → landmarker + embedder) dan **`buffalo_s.zip`** (122 MB → detektor). InsightFace tidak merilisnya sebagai `.onnx` satuan, jadi `modelctl` mengunduh paketnya lalu mengangkat anggota yang dibutuhkan.
 
-**Detektornya SCRFD-500M, bukan SCRFD-10GF.** Terukur pada CPU 8 core:
+**Detektornya SCRFD-500M, bukan SCRFD-10GF.** Terukur 60 sampel per konfigurasi, CPU 8 core — rincian dan metodologinya di [tasks/baseline.md](tasks/baseline.md):
 
-| Model | 640×640 | 480×480 | 320×320 |
-|---|---|---|---|
-| SCRFD-500M | **73 ms** | 49 ms | 33 ms |
-| SCRFD-10GF | 327 ms | 216 ms | 116 ms |
+| Model | 640 p50 | 640 p95 | 320 p50 | 320 p95 |
+|---|---|---|---|---|
+| **SCRFD-500M** | **131,9 ms** | 256,6 ms | 60,6 ms | 115,3 ms |
+| SCRFD-10GF | 985,9 ms | 1269,5 ms | 305,8 ms | 477,2 ms |
 
-Yang ringan di resolusi penuh lebih cepat daripada yang berat di seperempat resolusi. Tidak ada yang dikorbankan — resolusi lebih tinggi **dan** latensi lebih rendah sekaligus. Ini menyisakan ~77 ms dari anggaran 150 ms untuk tiga model berikutnya.
+Yang ringan di resolusi penuh mengalahkan yang berat di seperempat resolusi (132 ms vs 306 ms), jadi resolusi tidak perlu dikorbankan demi kecepatan.
+
+⚠️ **Kriteria A4 (p95 < 150 ms) kemungkinan besar harus direvisi, bukan dikejar.** Detektor saja sudah memakai 256 ms p95 di 640, dan itu belum menghitung tiga model berikutnya. Ditinjau ulang di T13.
 
 ⛔ **MiniFASNetV2 tidak punya rilis ONNX resmi.** Sumber aslinya (Silent-Face-Anti-Spoofing) merilis checkpoint PyTorch `.pth`, bukan ONNX. Ini harus diputuskan sebelum T11 — lihat Open Question #9.
 

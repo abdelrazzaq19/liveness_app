@@ -46,17 +46,19 @@ merusak manifest.
 
 ### Kenapa SCRFD-500M, bukan SCRFD-10GF
 
-Terukur pada CPU 8 core, adegan 480×640:
+Terukur 60 sampel per konfigurasi pada CPU 8 core — metodologi dan peringatannya
+di [tasks/baseline.md](../tasks/baseline.md):
 
-| Model | 640×640 | 480×480 | 320×320 |
-|---|---|---|---|
-| SCRFD-500M | **73 ms** | 49 ms | 33 ms |
-| SCRFD-10GF | 327 ms | 216 ms | 116 ms |
+| Model | 640 p50 | 640 p95 | 320 p50 | 320 p95 |
+|---|---|---|---|---|
+| **SCRFD-500M** | **131,9 ms** | 256,6 ms | 60,6 ms | 115,3 ms |
+| SCRFD-10GF | 985,9 ms | 1269,5 ms | 305,8 ms | 477,2 ms |
 
-Yang ringan di resolusi penuh lebih cepat daripada yang berat di seperempat
-resolusi. Tidak ada trade-off di sini — resolusi lebih tinggi **dan** latensi
-lebih rendah sekaligus. `det_10g.onnx` tetap ada di disk karena ikut terbawa
-dalam paket `buffalo_l`, dan berguna sebagai pembanding di benchmark.
+Yang ringan di resolusi penuh (132 ms) mengalahkan yang berat di seperempat
+resolusi (306 ms), jadi resolusi tidak perlu dikorbankan demi kecepatan.
+
+`det_10g.onnx` tetap ada di disk karena ikut terbawa dalam paket `buffalo_l`, dan
+berguna sebagai pembanding di benchmark.
 
 ## ⛔ Anti-spoof pasif belum terselesaikan
 
