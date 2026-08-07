@@ -39,3 +39,16 @@ type Detector interface {
 type Landmarker interface {
 	Landmarks(ctx context.Context, img image.Image, box BBox) (Landmarks106, error)
 }
+
+// AntiSpoofer scores how likely a detected face is to be a live person rather
+// than a photograph, a screen, or a mask.
+//
+// This is the passive check: it looks at one frame and asks whether the texture
+// is that of a face or of a reproduction of one. It complements the
+// challenge-response flow rather than replacing it — a print attack defeats
+// challenges by being held still, and a replayed video defeats texture analysis
+// by being a real recording.
+type AntiSpoofer interface {
+	// LivenessScore returns a value in [0,1]. Higher means more likely live.
+	LivenessScore(ctx context.Context, img image.Image, box BBox) (float64, error)
+}
