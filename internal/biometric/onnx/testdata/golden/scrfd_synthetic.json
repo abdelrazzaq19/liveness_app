@@ -1,0 +1,25 @@
+{
+  "model": "det_10g.onnx",
+  "input_size": 640,
+  "scene_width": 480,
+  "scene_height": 640,
+  "strides": [
+    {
+      "stride": 8,
+      "anchors": 12800,
+      "max_score": 0.024042
+    },
+    {
+      "stride": 16,
+      "anchors": 3200,
+      "max_score": 0.024821
+    },
+    {
+      "stride": 32,
+      "anchors": 800,
+      "max_score": 0.035113
+    }
+  ],
+  "detections_above_threshold": null,
+  "threshold": 0.3
+}

@@ -86,6 +86,18 @@ func (p *Pool) Size() int { return len(p.all) }
 // returns.
 func (p *Pool) Available() int { return len(p.free) }
 
+// Signature returns the graph's inputs and outputs.
+//
+// Every session in the pool loads the same file, so this is readable without
+// checking one out — which lets a caller validate that the model is the shape
+// it expects at wiring time rather than mid-request.
+func (p *Pool) Signature() (inputs, outputs []ort.InputOutputInfo) {
+	if len(p.all) == 0 {
+		return nil, nil
+	}
+	return p.all[0].Inputs, p.all[0].Outputs
+}
+
 // Acquire checks out a session, waiting until one is free.
 //
 // It returns ctx.Err() if the caller gives up first, so a cancelled request
