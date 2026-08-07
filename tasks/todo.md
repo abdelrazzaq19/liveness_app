@@ -25,8 +25,66 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | **Checkpoint 2** | — | ✅ **GATE LOLOS** — 2026-08-07 |
 | T9 landmark 106 + EAR/MAR | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T10 head pose | ✅ selesai | ✅ **lolos** — 2026-08-07 |
-| T11 anti-spoof | ⛔ **terblokir** Open Question #9 | — |
+| T11 anti-spoof | ✅ selesai | ✅ **lolos** — 2026-08-07 |
 | T12 embedder ArcFace | ⬜ berikutnya | — |
+
+### ✅ Open Question #9 terjawab: konversi `.pth` → ONNX
+
+Keputusan Anda 2026-08-07: opsi (a). Diimplementasikan sebagai container setup
+sekali jalan.
+
+**Arsitektur MiniFASNet tidak direproduksi dari ingatan.** Container konversi
+meng-clone repo upstream dan memakai definisi model **serta bobot mereka
+sendiri**. Mereproduksi arsitektur dari ingatan justru jenis tebakan yang
+menghasilkan angka masuk akal dan jawaban salah — dan di sini tidak ada cara
+untuk mengetahuinya tanpa dataset berlabel.
+
+| | |
+|---|---|
+| Upstream | `minivision-ai/Silent-Face-Anti-Spoofing` @ `b6d5f04a` |
+| Checkpoint | `2.7_80x80_MiniFASNetV2.pth` |
+| Toolchain | Python 3.11, torch 2.5.1 CPU, onnx 1.17.0 — semuanya di-pin |
+| Hasil | `minifasnet_v2.onnx`, 1,7 MB, sha256 `f0a988fc…` |
+| Graph | input `[-1 3 80 80]` → output `[-1 3]` logit |
+
+Service-nya sendiri **tidak pernah butuh Python**. Ini murni langkah setup, dan
+"project tunggal" tetap utuh untuk runtime-nya.
+
+`modelctl` diperluas: artefak boleh punya `build` alih-alih `url`. Digest-nya
+tetap direkam, jadi model bangunan lokal ter-pin persis seperti yang diunduh —
+yang berbeda hanya asal byte-nya, bukan apakah orang bisa tahu byte itu berubah.
+`download` menolak dengan menyebutkan perintah yang memproduksinya, bukan gagal
+karena URL kosong.
+
+### Bukti T11
+
+| Kriteria | Hasil |
+|---|---|
+| Skor real/spoof terkalibrasi [0,1] | ✅ softmax atas 3 logit, kelas 1 = wajah hidup |
+| Skor selalu probabilitas sah | ✅ diuji pada wajah sintetis, abu-abu rata, hitam murni, wajah di tepi frame |
+| Deterministik | ✅ 5 run pada frame yang sama, identik sampai bit |
+| Softmax tahan logit besar | ✅ ±1000 tidak menghasilkan NaN/Inf |
+| Crop 2,7× digeser, bukan dipotong, di tepi | ✅ empat posisi tepi diuji |
+| Urutan kanal | ✅ **BGR**, diuji eksplisit |
+| Graph salah ditolak saat konstruksi | ✅ ukuran input dan jumlah kelas |
+| Ambang tidak di-hardcode di jalur keputusan | ✅ skor dikembalikan mentah, ambang dari config |
+
+Sinyal bahwa modelnya benar-benar bekerja: input non-wajah (sintetis, abu-abu,
+hitam) semuanya skor **0,005–0,008** — model dengan benar mengatakan "bukan
+wajah hidup".
+
+### Dua detail pre-processing yang tidak memunculkan error kalau salah
+
+**1. BGR, bukan RGB.** Detektor SCRFD memakai `swapRB=True` sehingga RGB.
+MiniFASNet memakai `ToTensor` pada gambar hasil `cv2.imread` yang **BGR**, dan
+`ToTensor` hanya membagi 255 dan memindahkan sumbu — ia tidak pernah menukar
+kanal. Memberi RGB di sini tidak menghasilkan error, hanya skor yang berbeda
+secara berarti.
+
+**2. Resize anisotropik disengaja.** Upstream me-resize rektangel apa pun yang
+di-crop langsung ke input persegi, jadi box wajah non-persegi teregang. Jaringan
+dilatih persis pada itu; "memperbaikinya" justru memberi geometri yang belum
+pernah ia lihat.
 
 ### Bukti T10
 
