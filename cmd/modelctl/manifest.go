@@ -39,6 +39,25 @@ type Artifact struct {
 	As string `json:"as,omitempty"`
 
 	Extract []Member `json:"extract,omitempty"`
+
+	// Build is set instead of URL for artifacts that have no downloadable
+	// release and must be produced locally.
+	Build *Build `json:"build,omitempty"`
+}
+
+// Build describes how an artifact is produced when nobody publishes it.
+//
+// The digest still gets recorded, so a locally built model is pinned exactly
+// like a downloaded one: what changes is only where the bytes came from, not
+// whether anyone can tell they have changed.
+type Build struct {
+	// Command is what the operator runs to produce the file.
+	Command string `json:"command"`
+
+	// Source and SourceRef record what the build was made from, which is the
+	// only provenance a locally produced file has.
+	Source    string `json:"source,omitempty"`
+	SourceRef string `json:"source_ref,omitempty"`
 }
 
 // Member is one file lifted out of a zip archive.
@@ -132,9 +151,19 @@ func (m *Manifest) validate() error {
 			problems = append(problems, fmt.Errorf("artifact name: %w", err))
 			continue
 		}
-		if a.URL == "" {
-			problems = append(problems, fmt.Errorf("%s: missing url", a.Name))
+		switch {
+		case a.Build != nil && a.URL != "":
+			problems = append(problems, fmt.Errorf("%s: has both \"url\" and \"build\"; pick one", a.Name))
+		case a.Build != nil && a.Build.Command == "":
+			problems = append(problems, fmt.Errorf("%s: build needs a command", a.Name))
+		case a.Build == nil && a.URL == "":
+			problems = append(problems, fmt.Errorf("%s: needs either \"url\" or \"build\"", a.Name))
 		}
+
+		if a.Build != nil && len(a.Extract) > 0 {
+			problems = append(problems, fmt.Errorf("%s: a built artifact cannot also be an archive", a.Name))
+		}
+
 		if a.License == "" {
 			problems = append(problems, fmt.Errorf("%s: missing license; every model must record one", a.Name))
 		}

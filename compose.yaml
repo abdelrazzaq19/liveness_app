@@ -98,6 +98,26 @@ services:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
 
+  # Mengubah checkpoint PyTorch MiniFASNet jadi ONNX. Dijalankan sekali:
+  #
+  #   docker compose --profile setup run --rm antispoof-convert
+  #   docker compose --profile setup run --rm modelctl pin
+  #
+  # Upstream hanya merilis bobot PyTorch, tanpa ONNX. Container ini meng-clone
+  # repo mereka dan memakai definisi model serta bobot mereka sendiri —
+  # mereproduksi arsitekturnya dari ingatan justru jenis tebakan yang
+  # menghasilkan angka masuk akal dan jawaban salah.
+  #
+  # Service-nya sendiri tidak pernah butuh Python. Ini murni langkah setup.
+  antispoof-convert:
+    build:
+      context: .
+      dockerfile: tools/antispoof/Dockerfile
+    image: liveness-verifier-antispoof-convert:local
+    profiles: ["setup"]
+    volumes:
+      - ./models:/out
+
   # Toolchain: go, golangci-lint, gofumpt, goose.
   #
   #   docker compose run --rm dev go test ./... -race

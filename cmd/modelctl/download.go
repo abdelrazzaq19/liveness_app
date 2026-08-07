@@ -37,6 +37,13 @@ func ensure(ctx context.Context, m *Manifest, dir string, client *http.Client, o
 			continue
 		}
 
+		// Nothing to fetch for a locally built artifact: say what produces it
+		// rather than failing on a missing URL.
+		if a.Build != nil {
+			return fmt.Errorf("artifact %s must be built locally; run:\n\n    %s\n\nthen: modelctl pin",
+				a.Name, a.Build.Command)
+		}
+
 		fmt.Fprintf(out, "fetching %s\n         %s\n", a.Name, a.URL)
 		if _, err := fetchArtifact(ctx, a, dir, client, true); err != nil {
 			return fmt.Errorf("artifact %s: %w", a.Name, err)
@@ -91,6 +98,19 @@ func pin(ctx context.Context, m *Manifest, dir string, client *http.Client, out 
 
 		if !force && a.SHA256 != "" && satisfied(a, dir) {
 			fmt.Fprintf(out, "ok       %s (already pinned)\n", a.Name)
+			continue
+		}
+
+		// A built artifact is already on disk; pinning it means recording what
+		// the build produced.
+		if a.Build != nil {
+			sum, size, err := fileSHA256(filepath.Join(dir, a.As))
+			if err != nil {
+				return fmt.Errorf("artifact %s: %w\nrun: %s", a.Name, err, a.Build.Command)
+			}
+			m.Artifacts[i].SHA256 = sum
+			m.Artifacts[i].SizeBytes = size
+			fmt.Fprintf(out, "pinned   %s sha256=%s (%s, built locally)\n", a.Name, sum, humanSize(size))
 			continue
 		}
 

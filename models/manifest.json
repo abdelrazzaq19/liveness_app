@@ -42,6 +42,21 @@
           "sha256": "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a"
         }
       ]
+    },
+    {
+      "name": "minifasnet_v2",
+      "url": "",
+      "sha256": "f0a988fc58ae5f216c6c0d89788f3d2480c58010572a71144936f1d650a06c88",
+      "size_bytes": 1744200,
+      "license": "Silent-Face-Anti-Spoofing (minivision-ai) - Apache-2.0",
+      "license_url": "https://github.com/minivision-ai/Silent-Face-Anti-Spoofing/blob/master/LICENSE",
+      "notes": "Upstream ships PyTorch weights and no ONNX release, so this one is converted locally from their own model definition and their own checkpoint 2.7_80x80_MiniFASNetV2.pth. The crop fed to it must be 2.7x the detected face box, resized to 80x80, with values in [0,1] and no mean subtraction. Output is 3 logits; class 1 is a real face.",
+      "as": "minifasnet_v2.onnx",
+      "build": {
+        "command": "docker compose --profile setup run --rm antispoof-convert",
+        "source": "https://github.com/minivision-ai/Silent-Face-Anti-Spoofing",
+        "source_ref": "b6d5f04ad78778917853b25c778acef6d5626d15"
+      }
     }
   ]
 }
