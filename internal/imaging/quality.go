@@ -1,17 +1,20 @@
 package imaging
 
 import (
-	"errors"
 	"fmt"
 	"image"
 	"image/draw"
+
+	"github.com/ziad/liveness-verifier/internal/biometric"
 )
 
-// ErrLowQuality means a frame is not worth running a model on.
+// ErrLowQuality is re-exported so callers of this package do not have to reach
+// into biometric for it.
 //
-// It is a routine outcome, not a malfunction: the caller is expected to ask the
-// client for another frame rather than fail the session.
-var ErrLowQuality = errors.New("imaging: frame quality too low")
+// One sentinel rather than two: a frame rejected here and a frame rejected by
+// the pipeline are the same outcome to everything upstream, and two errors
+// meaning the same thing is how one of them ends up unhandled.
+var ErrLowQuality = biometric.ErrLowQuality
 
 // Metrics describes how usable a frame is.
 type Metrics struct {
@@ -91,6 +94,23 @@ func (g Gate) Check(m Metrics, faceWidth float64) error {
 	default:
 		return nil
 	}
+}
+
+// QualityCheck adapts a Gate to the function signature the biometric pipeline
+// takes.
+//
+// The face-size check is left out here: it needs a detection, so the pipeline
+// applies it after the detector rather than before it.
+func (g Gate) QualityCheck(img image.Image) (biometric.Quality, error) {
+	m := Measure(img)
+
+	q := biometric.Quality{
+		Width:      m.Width,
+		Height:     m.Height,
+		Brightness: m.Brightness,
+		Sharpness:  m.LaplacianVariance,
+	}
+	return q, g.Check(m, 0)
 }
 
 // laplacianVariance convolves with a 4-neighbour Laplacian and returns the

@@ -58,6 +58,7 @@ type options struct {
 	repeat      int
 	warmup      int
 	verbose     bool
+	full        bool
 }
 
 func run(args []string, out, errOut *os.File) error {
@@ -80,6 +81,7 @@ func run(args []string, out, errOut *os.File) error {
 	fs.IntVar(&o.repeat, "repeat", 1, "passes over the input set")
 	fs.IntVar(&o.warmup, "warmup", 3, "untimed inferences before measuring")
 	fs.BoolVar(&o.verbose, "v", false, "print a line per frame")
+	fs.BoolVar(&o.full, "full", false, "measure the whole pipeline stage by stage, not just the detector")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -104,6 +106,10 @@ func run(args []string, out, errOut *os.File) error {
 	}
 	if len(frames) == 0 {
 		return fmt.Errorf("no usable frames found in %s", o.imageDir)
+	}
+
+	if o.full {
+		return runFullPipeline(o, frames, out)
 	}
 
 	detector, closeRuntime, err := buildDetector(o)
