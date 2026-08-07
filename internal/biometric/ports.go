@@ -52,3 +52,12 @@ type AntiSpoofer interface {
 	// LivenessScore returns a value in [0,1]. Higher means more likely live.
 	LivenessScore(ctx context.Context, img image.Image, box BBox) (float64, error)
 }
+
+// Embedder turns a face into a vector that can be compared against another.
+//
+// It takes the coarse keypoints rather than the box because the crop has to be
+// aligned, not merely cut out: an embedding model only produces comparable
+// vectors for faces posed the way its training data was.
+type Embedder interface {
+	Embed(ctx context.Context, img image.Image, kps Keypoints) (Embedding, error)
+}
