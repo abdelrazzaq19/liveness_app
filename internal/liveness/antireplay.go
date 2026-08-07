@@ -11,9 +11,6 @@ import (
 // Replay defences, each with its own error so a caller can tell a recoverable
 // rejection from a fatal one.
 var (
-	// ErrNonceMismatch means the frame was not issued for this session.
-	ErrNonceMismatch = errors.New("liveness: frame nonce does not match the session")
-
 	// ErrSequenceReplay means a frame arrived out of order or twice.
 	ErrSequenceReplay = errors.New("liveness: frame sequence went backwards or repeated")
 
@@ -36,12 +33,15 @@ var (
 )
 
 // Frame is what the client sends alongside the image.
+//
+// The nonce is not here. Holding it is what authorises the caller to touch the
+// session at all, so it is checked before any of this runs — and checked as
+// authorisation rather than as a replay defence. Treating a wrong nonce as a
+// failed session, which is where it used to live, let anyone who learned a
+// session id destroy somebody else's verification by sending one bad frame.
 type Frame struct {
 	// Seq must increase strictly across a session.
 	Seq int64
-
-	// Nonce ties the frame to the session it was issued for.
-	Nonce string
 
 	// PHash is the perceptual hash of the decoded frame.
 	PHash uint64
@@ -140,9 +140,6 @@ func (g Guard) Check(s *Session, f Frame, face biometric.Face) error {
 // model inferences. Rejecting the cheap way round is the difference between an
 // attacker wasting their own time and wasting the service's.
 func (g Guard) CheckRequest(s *Session, f Frame) error {
-	if f.Nonce != s.Nonce {
-		return ErrNonceMismatch
-	}
 	if f.Seq <= s.LastSeq {
 		return fmt.Errorf("%w: got %d, last accepted %d", ErrSequenceReplay, f.Seq, s.LastSeq)
 	}

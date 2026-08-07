@@ -45,6 +45,16 @@ func run() error {
 	log := newLogger(cfg.Log)
 	slog.SetDefault(log)
 
+	// A setting that widens what anyone on the network can reach should be
+	// visible in the log of every boot, not only in the file somebody edited
+	// once.
+	if cfg.Server.AllowAnonymousSessions {
+		log.Warn("anonymous session creation is enabled: anyone who can reach this port can open a verification session",
+			slog.Int("rate_limit_per_min", cfg.Server.RateLimitPerMin),
+			slog.String("hint", "set LV_ALLOW_ANONYMOUS_SESSIONS=false and create sessions from your own backend"),
+		)
+	}
+
 	// Everything that can fail about the wiring fails here, before the listener
 	// opens. A service that accepts connections it cannot serve is worse than
 	// one that refuses to start.

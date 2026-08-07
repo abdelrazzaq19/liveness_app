@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -28,6 +27,7 @@ type fakeLiveness struct {
 
 	lastInput liveness.FrameInput
 	lastID    liveness.SessionID
+	lastNonce string
 }
 
 func (f *fakeLiveness) Start(context.Context) (*liveness.Session, error) {
@@ -40,12 +40,14 @@ func (f *fakeLiveness) SubmitFrame(_ context.Context, id liveness.SessionID, in 
 	return f.result, f.submitErr
 }
 
-func (f *fakeLiveness) Complete(_ context.Context, id liveness.SessionID) (liveness.Verdict, error) {
+func (f *fakeLiveness) Complete(_ context.Context, id liveness.SessionID, nonce string) (liveness.Verdict, error) {
+	f.lastNonce = nonce
 	f.lastID = id
 	return f.verdict, f.completeErr
 }
 
-func (f *fakeLiveness) Get(_ context.Context, id liveness.SessionID) (*liveness.Session, error) {
+func (f *fakeLiveness) Get(_ context.Context, id liveness.SessionID, nonce string) (*liveness.Session, error) {
+	f.lastNonce = nonce
 	f.lastID = id
 	return f.session, f.getErr
 }
@@ -291,7 +293,6 @@ func TestDomainErrorsMapToStatusCodes(t *testing.T) {
 		{"already finished", liveness.ErrSessionFinished, http.StatusConflict},
 		{"concurrent write", liveness.ErrVersionConflict, http.StatusConflict},
 		{"replayed sequence", liveness.ErrSequenceReplay, http.StatusUnprocessableEntity},
-		{"wrong nonce", liveness.ErrNonceMismatch, http.StatusUnprocessableEntity},
 		{"still image", liveness.ErrStaticReplay, http.StatusUnprocessableEntity},
 		{"spoof", liveness.ErrSpoofDetected, http.StatusUnprocessableEntity},
 		{"identity changed", liveness.ErrIdentityChanged, http.StatusUnprocessableEntity},
@@ -317,6 +318,29 @@ func TestDomainErrorsMapToStatusCodes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A wrong nonce is different in kind from the defences above, and is answered
+// differently on purpose.
+//
+// It is a failure to authorise, not a failed verification: 403 rather than 422,
+// and the message says plainly what is wrong. That leaks nothing — the caller
+// already knows whether they sent a nonce — while an opaque "verification
+// failed" would send an honest integrator hunting through their camera code for
+// a bug in their header.
+func TestAWrongNonceIsAnAuthorisationFailure(t *testing.T) {
+	fake := &fakeLiveness{session: newFakeSession(t), getErr: liveness.ErrWrongNonce}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/liveness/sessions/abc", nil)
+	req.Header.Set(headerSessionNonce, "wrong")
+
+	rec := do(livenessRouter(t, fake), req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d\nbody: %s", rec.Code, http.StatusForbidden, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "nonce") {
+		t.Errorf("the response does not say what was wrong: %s", rec.Body)
 	}
 }
 
@@ -377,22 +401,133 @@ func TestStatusExposesNothingBiometric(t *testing.T) {
 	}
 }
 
-func TestLivenessEndpointsRequireAnAPIKey(t *testing.T) {
+// Creating a session is the integrator's call: it allocates a row and a slot of
+// inference work, so it is the one that has to be attributable.
+func TestCreatingASessionNeedsTheOperatorKey(t *testing.T) {
+	fake := &fakeLiveness{session: newFakeSession(t)}
+
+	rec := do(livenessRouter(t, fake), httptest.NewRequest(http.MethodPost, "/v1/liveness/sessions", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// The whole point of the split: a subject's browser operates the session it was
+// handed without ever holding an operator credential.
+func TestSessionScopedEndpointsNeedNoAPIKey(t *testing.T) {
 	fake := &fakeLiveness{session: newFakeSession(t)}
 	h := livenessRouter(t, fake)
 
-	paths := []struct{ method, path string }{
-		{http.MethodPost, "/v1/liveness/sessions"},
-		{http.MethodGet, "/v1/liveness/sessions/abc"},
-		{http.MethodPost, "/v1/liveness/sessions/abc/frames"},
-		{http.MethodPost, "/v1/liveness/sessions/abc/complete"},
+	frame := pngFrame(t, 16, 16)
+
+	calls := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"status", http.MethodGet, "/v1/liveness/sessions/abc", nil},
+		{"complete", http.MethodPost, "/v1/liveness/sessions/abc/complete", nil},
+		{
+			"frames", http.MethodPost, "/v1/liveness/sessions/abc/frames",
+			submitFrameRequest{Seq: 1, Nonce: "n", Frame: frame},
+		},
 	}
 
-	for _, p := range paths {
-		t.Run(fmt.Sprintf("%s %s", p.method, p.path), func(t *testing.T) {
-			rec := do(h, httptest.NewRequest(p.method, p.path, nil))
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			var req *http.Request
+			if c.body == nil {
+				req = httptest.NewRequest(c.method, c.path, nil)
+			} else {
+				raw, _ := json.Marshal(c.body)
+				req = httptest.NewRequest(c.method, c.path, bytes.NewReader(raw))
+				req.Header.Set("Content-Type", "application/json")
+			}
+			// No X-API-Key. The session nonce is the authorisation.
+			req.Header.Set(headerSessionNonce, "the-nonce")
+
+			rec := do(h, req)
+			if rec.Code == http.StatusUnauthorized {
+				t.Errorf("status = %d; a subject's browser was asked for an operator key\nbody: %s",
+					rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// The nonce has to reach the service on the calls that have no body to carry
+// it, or they would be authorising on the session id alone.
+func TestNonceHeaderReachesTheService(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"status", http.MethodGet, "/v1/liveness/sessions/abc"},
+		{"complete", http.MethodPost, "/v1/liveness/sessions/abc/complete"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := &fakeLiveness{session: newFakeSession(t)}
+
+			req := httptest.NewRequest(c.method, c.path, nil)
+			req.Header.Set(headerSessionNonce, "carried-through")
+			do(livenessRouter(t, fake), req)
+
+			if fake.lastNonce != "carried-through" {
+				t.Errorf("the service received nonce %q, want the one from the header", fake.lastNonce)
+			}
+		})
+	}
+}
+
+// With anonymous sessions enabled the demo can open one, and the operator key
+// stops being required for that call too.
+func TestAnonymousSessionsCanBeEnabled(t *testing.T) {
+	fake := &fakeLiveness{session: newFakeSession(t)}
+
+	cfg := testConfig()
+	cfg.Server.AllowAnonymousSessions = true
+
+	h, err := NewRouter(Deps{Config: cfg, Logger: discardLogger(), Liveness: fake})
+	if err != nil {
+		t.Fatalf("NewRouter() returned an unexpected error: %v", err)
+	}
+
+	rec := do(h, httptest.NewRequest(http.MethodPost, "/v1/liveness/sessions", nil))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d, want %d\nbody: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+}
+
+// The anonymous setting must reach exactly one route.
+//
+// Scoped to a group instead, it would quietly open every endpoint anyone added
+// to that group later — and the enrollment endpoints are going in next door.
+func TestAnonymousSessionsDoNotOpenAnythingElse(t *testing.T) {
+	for _, anonymous := range []bool{false, true} {
+		name := "anonymous sessions off"
+		if anonymous {
+			name = "anonymous sessions on"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeLiveness{session: newFakeSession(t)}
+
+			cfg := testConfig()
+			cfg.Server.AllowAnonymousSessions = anonymous
+
+			h, err := NewRouter(Deps{Config: cfg, Logger: discardLogger(), Liveness: fake})
+			if err != nil {
+				t.Fatalf("NewRouter() returned an unexpected error: %v", err)
+			}
+
+			// A path that is not yet mounted stands in for the enrollment
+			// endpoints. It must need the key either way.
+			rec := do(h, httptest.NewRequest(http.MethodGet, "/v1/faces/search", nil))
 			if rec.Code != http.StatusUnauthorized {
-				t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+				t.Errorf("status = %d, want %d; the anonymous setting reached beyond session creation",
+					rec.Code, http.StatusUnauthorized)
 			}
 		})
 	}

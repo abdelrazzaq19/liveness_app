@@ -2,6 +2,7 @@ package liveness
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"image"
@@ -14,6 +15,14 @@ import (
 
 // ErrSessionNotFound means no session exists with that id.
 var ErrSessionNotFound = errors.New("liveness: session not found")
+
+// ErrWrongNonce means the caller does not hold the session's credentials.
+//
+// The nonce is what authorises a subject's browser to operate a session it was
+// handed. It has to be checked on every session-scoped call, not only on
+// frames, or the id alone would be enough to read or finish somebody else's
+// verification.
+var ErrWrongNonce = errors.New("liveness: session nonce does not match")
 
 // ErrVersionConflict means the session changed underneath an update.
 //
@@ -206,6 +215,13 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		return FrameResult{}, err
 	}
 
+	// Authorisation first, and before any mutation. A caller who does not hold
+	// the nonce must not be able to change the session in any way — including
+	// ending it, which is what a wrong nonce used to do.
+	if err := authorise(session, in.Nonce); err != nil {
+		return FrameResult{}, err
+	}
+
 	now := s.deps.Clock.Now()
 
 	if session.State.Terminal() {
@@ -218,7 +234,7 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		return FrameResult{}, err
 	}
 
-	frame := Frame{Seq: in.Seq, Nonce: in.Nonce, PHash: in.PHash}
+	frame := Frame{Seq: in.Seq, PHash: in.PHash}
 
 	// The cheap defences first: a replayed sequence number must not cost four
 	// model inferences.
@@ -287,9 +303,12 @@ type Verdict struct {
 //
 // It refuses a session that has not satisfied every challenge, rather than
 // quietly passing one that ran out of instructions to follow.
-func (s *Service) Complete(ctx context.Context, id SessionID) (Verdict, error) {
+func (s *Service) Complete(ctx context.Context, id SessionID, nonce string) (Verdict, error) {
 	session, err := s.deps.Sessions.Get(ctx, id)
 	if err != nil {
+		return Verdict{}, err
+	}
+	if err := authorise(session, nonce); err != nil {
 		return Verdict{}, err
 	}
 
@@ -322,9 +341,12 @@ func (s *Service) Complete(ctx context.Context, id SessionID) (Verdict, error) {
 }
 
 // Get returns a session.
-func (s *Service) Get(ctx context.Context, id SessionID) (*Session, error) {
+func (s *Service) Get(ctx context.Context, id SessionID, nonce string) (*Session, error) {
 	session, err := s.deps.Sessions.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorise(session, nonce); err != nil {
 		return nil, err
 	}
 
@@ -397,6 +419,18 @@ func (s *Service) save(ctx context.Context, session *Session, result FrameResult
 		return FrameResult{}, err
 	}
 	return result, nil
+}
+
+// authorise checks that the caller holds the session's nonce.
+//
+// Compared in constant time. The comparison is cheap either way, and a timing
+// side channel on a 128-bit capability is exactly the sort of thing that is
+// obvious in hindsight.
+func authorise(session *Session, nonce string) error {
+	if subtle.ConstantTimeCompare([]byte(nonce), []byte(session.Nonce)) != 1 {
+		return ErrWrongNonce
+	}
+	return nil
 }
 
 // recoverableAnalysis reports whether a pipeline error means "send another

@@ -15,7 +15,6 @@ const els = {
   instruction: document.getElementById('instruction'),
   hint: document.getElementById('hint'),
   steps: document.getElementById('steps'),
-  apikey: document.getElementById('apikey'),
   start: document.getElementById('start'),
   stop: document.getElementById('stop'),
   status: document.getElementById('status'),
@@ -159,15 +158,21 @@ function showChallenge(kind, seconds) {
   drawCountdown();
 }
 
+// api calls the service.
+//
+// No API key anywhere in this file, deliberately. A key is an operator's
+// credential and the person in front of the camera is a subject; putting one in
+// their browser is how it ends up somewhere it should not be. What authorises
+// these calls is the session's own nonce, which the server hands back when the
+// session opens.
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': els.apikey.value.trim(),
-      ...(options.headers || {}),
-    },
-  });
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+  if (state.session?.nonce) headers['X-Session-Nonce'] = state.session.nonce;
+
+  const res = await fetch(path, { ...options, headers });
 
   let body = null;
   try { body = await res.json(); } catch { /* an empty or non-JSON body is fine */ }
@@ -295,15 +300,9 @@ function stop() {
   els.video.srcObject = null;
   els.start.hidden = false;
   els.stop.hidden = true;
-  els.apikey.disabled = false;
 }
 
 async function start() {
-  if (!els.apikey.value.trim()) {
-    setStatus('Masukkan API key dari .env terlebih dahulu.', 'warn');
-    return;
-  }
-
   setBadge(null);
   setStatus('Meminta akses kamera…');
   els.start.disabled = true;
@@ -333,7 +332,16 @@ async function start() {
     state.session = await api('/v1/liveness/sessions', { method: 'POST' });
   } catch (err) {
     stop();
-    setStatus(err.status === 401 ? 'API key ditolak.' : err.message, 'bad');
+    if (err.status === 401) {
+      // Anonymous session creation is off, which is the safe default. This page
+      // has no backend to hold a key, so it cannot open a session on its own.
+      setStatus('Server ini tidak mengizinkan sesi anonim. Setel LV_ALLOW_ANONYMOUS_SESSIONS=true ' +
+        'untuk demo, atau buat sesi dari backend Anda sendiri.', 'bad');
+    } else if (err.status === 429) {
+      setStatus('Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.', 'warn');
+    } else {
+      setStatus(err.message, 'bad');
+    }
     return;
   }
 
@@ -346,7 +354,6 @@ async function start() {
 
   els.start.hidden = true;
   els.stop.hidden = false;
-  els.apikey.disabled = true;
   setStatus('Ikuti instruksi.');
 
   state.timer = setInterval(sendFrame, FRAME_INTERVAL_MS);

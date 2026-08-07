@@ -79,6 +79,20 @@ type Server struct {
 
 	APIKeys         []Secret
 	RateLimitPerMin int
+
+	// AllowAnonymousSessions lets a browser create a verification session
+	// without an operator API key.
+	//
+	// Off by default, and it should stay off anywhere real. The intended
+	// deployment is that an integrator's own backend holds the key, creates the
+	// session, and hands the id and nonce to the subject's browser — which then
+	// needs no key at all, because the session credentials authorise it.
+	//
+	// Turning this on is for the bundled demo and for anything else with no
+	// backend of its own. It makes session creation, and therefore a database
+	// row and a slot of inference work, available to anyone who can reach the
+	// port. Rate limiting is the only thing left standing in front of it.
+	AllowAnonymousSessions bool
 }
 
 // Log holds logging settings.
@@ -206,6 +220,8 @@ func load(getenv func(string) string) (*Config, error) {
 			MaxFrameBytes:   int64(l.intRange("LV_HTTP_MAX_FRAME_BYTES", 2<<20, 64<<10, 32<<20)),
 			APIKeys:         l.secretsRequired("LV_API_KEYS"),
 			RateLimitPerMin: l.intRange("LV_RATE_LIMIT_PER_MIN", 600, 1, 100_000),
+
+			AllowAnonymousSessions: l.boolean("LV_ALLOW_ANONYMOUS_SESSIONS", false),
 		},
 		Log: Log{
 			Level:  l.logLevel("LV_LOG_LEVEL", slog.LevelInfo),

@@ -25,9 +25,16 @@ import (
 type LivenessService interface {
 	Start(ctx context.Context) (*liveness.Session, error)
 	SubmitFrame(ctx context.Context, id liveness.SessionID, in liveness.FrameInput) (liveness.FrameResult, error)
-	Complete(ctx context.Context, id liveness.SessionID) (liveness.Verdict, error)
-	Get(ctx context.Context, id liveness.SessionID) (*liveness.Session, error)
+	Complete(ctx context.Context, id liveness.SessionID, nonce string) (liveness.Verdict, error)
+	Get(ctx context.Context, id liveness.SessionID, nonce string) (*liveness.Session, error)
 }
+
+// headerSessionNonce carries the session's nonce on calls that have no body to
+// put it in.
+//
+// A header rather than a query parameter: query strings end up in access logs,
+// browser history, and referrer headers, and this one is a credential.
+const headerSessionNonce = "X-Session-Nonce"
 
 // livenessHandler serves the session endpoints.
 type livenessHandler struct {
@@ -43,12 +50,10 @@ type livenessHandler struct {
 	maxBodyBytes int64
 }
 
-func (h *livenessHandler) routes(r chi.Router) {
-	r.Post("/sessions", h.start)
-	r.Get("/sessions/{id}", h.status)
-	r.Post("/sessions/{id}/frames", h.submitFrame)
-	r.Post("/sessions/{id}/complete", h.complete)
-}
+// The routes are registered in router.go rather than here, because they no
+// longer share one middleware chain: creating a session needs an operator key,
+// operating one needs the session's nonce, and a single mount point cannot say
+// that.
 
 func (h *livenessHandler) start(w http.ResponseWriter, r *http.Request) {
 	session, err := h.svc.Start(r.Context())
@@ -61,7 +66,9 @@ func (h *livenessHandler) start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *livenessHandler) status(w http.ResponseWriter, r *http.Request) {
-	session, err := h.svc.Get(r.Context(), liveness.SessionID(chi.URLParam(r, "id")))
+	id := liveness.SessionID(chi.URLParam(r, "id"))
+
+	session, err := h.svc.Get(r.Context(), id, r.Header.Get(headerSessionNonce))
 	if err != nil {
 		respond(w, r, h.log, mapLivenessError(err))
 		return
@@ -70,7 +77,9 @@ func (h *livenessHandler) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *livenessHandler) complete(w http.ResponseWriter, r *http.Request) {
-	verdict, err := h.svc.Complete(r.Context(), liveness.SessionID(chi.URLParam(r, "id")))
+	id := liveness.SessionID(chi.URLParam(r, "id"))
+
+	verdict, err := h.svc.Complete(r.Context(), id, r.Header.Get(headerSessionNonce))
 	if err != nil {
 		respond(w, r, h.log, mapLivenessError(err))
 		return
@@ -162,6 +171,13 @@ func mapLivenessError(err error) error {
 	case errors.Is(err, liveness.ErrSessionNotFound):
 		return FailWith(http.StatusNotFound, CodeNotFound, "no such session", err)
 
+	// A wrong nonce is a failure to authorise, not a failed verification. It
+	// must never touch the session: otherwise anyone who learned an id could
+	// destroy somebody else's attempt by sending one bad request.
+	case errors.Is(err, liveness.ErrWrongNonce):
+		return FailWith(http.StatusForbidden, CodeForbidden,
+			"the session nonce is missing or wrong", err)
+
 	case errors.Is(err, liveness.ErrSessionExpired):
 		return FailWith(http.StatusGone, CodeGone, "the session expired", err)
 
@@ -178,8 +194,7 @@ func mapLivenessError(err error) error {
 
 	// Every replay and spoof defence collapses to one response. They are
 	// different failures internally and must look identical from outside.
-	case errors.Is(err, liveness.ErrNonceMismatch),
-		errors.Is(err, liveness.ErrSequenceReplay),
+	case errors.Is(err, liveness.ErrSequenceReplay),
 		errors.Is(err, liveness.ErrStaticReplay),
 		errors.Is(err, liveness.ErrSpoofDetected),
 		errors.Is(err, liveness.ErrIdentityChanged):

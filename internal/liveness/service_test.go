@@ -329,13 +329,6 @@ func TestFatalRejectionsEndTheSession(t *testing.T) {
 			face: biometric.Face{EAR: 0.35, LivenessScore: 0.95},
 		},
 		{
-			name: "wrong nonce",
-			setup: func(_ *harness, _ *Session) (int64, string, uint64) {
-				return 1, "not-the-nonce", 0x3333
-			},
-			face: biometric.Face{EAR: 0.35, LivenessScore: 0.95},
-		},
-		{
 			name: "spoof",
 			setup: func(_ *harness, s *Session) (int64, string, uint64) {
 				return 1, s.Nonce, 0x4444
@@ -433,7 +426,7 @@ func TestASessionCanBeCompletedEndToEnd(t *testing.T) {
 	}
 
 	for guard := 0; guard < 60; guard++ {
-		current, err := h.svc.Get(context.Background(), s.ID)
+		current, err := h.svc.Get(context.Background(), s.ID, s.Nonce)
 		if err != nil {
 			t.Fatalf("Get() returned an unexpected error: %v", err)
 		}
@@ -476,7 +469,7 @@ func TestASessionCanBeCompletedEndToEnd(t *testing.T) {
 		seq++
 	}
 
-	verdict, err := h.svc.Complete(context.Background(), s.ID)
+	verdict, err := h.svc.Complete(context.Background(), s.ID, s.Nonce)
 	if err != nil {
 		t.Fatalf("Complete() returned an unexpected error: %v", err)
 	}
@@ -498,7 +491,7 @@ func TestCompleteRefusesAnUnfinishedSession(t *testing.T) {
 		t.Fatalf("Start() returned an unexpected error: %v", err)
 	}
 
-	_, err = h.svc.Complete(context.Background(), s.ID)
+	_, err = h.svc.Complete(context.Background(), s.ID, s.Nonce)
 	if !errors.Is(err, ErrChallengesIncomplete) {
 		t.Errorf("Complete() error = %v, want ErrChallengesIncomplete", err)
 	}
@@ -526,7 +519,7 @@ func TestExpiryEndsTheSession(t *testing.T) {
 
 		h.clock.Advance(91 * time.Second)
 
-		got, err := h.svc.Get(context.Background(), s.ID)
+		got, err := h.svc.Get(context.Background(), s.ID, s.Nonce)
 		if err != nil {
 			t.Fatalf("Get() returned an unexpected error: %v", err)
 		}
@@ -679,16 +672,74 @@ func TestAdvancingReportsTheNextChallengesCountdown(t *testing.T) {
 	}
 }
 
+// Holding the nonce is what authorises a caller to touch a session at all. A
+// wrong one must be refused without changing anything: when it used to be a
+// replay defence, anyone who learned a session id could destroy somebody else's
+// verification by sending a single bad frame.
+func TestAWrongNonceIsRefusedWithoutTouchingTheSession(t *testing.T) {
+	h := newHarness(t, nil)
+	h.analyzer.faces = []biometric.Face{{EAR: 0.35, LivenessScore: 0.95}}
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	if _, err := h.sendFrame(t, s.ID, 1, "not-the-nonce", 0xBAD1); !errors.Is(err, ErrWrongNonce) {
+		t.Fatalf("SubmitFrame() error = %v, want ErrWrongNonce", err)
+	}
+
+	stored, err := h.repo.Get(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("Get() returned an unexpected error: %v", err)
+	}
+	if stored.State != StatePending {
+		t.Errorf("state = %s after a wrong nonce, want it untouched at %s", stored.State, StatePending)
+	}
+	if stored.LastSeq != 0 {
+		t.Errorf("last sequence = %d after a wrong nonce, want 0", stored.LastSeq)
+	}
+
+	// And the honest holder can still use the session.
+	if _, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0xBAD2); err != nil {
+		t.Errorf("the real session holder was refused after somebody else guessed wrong: %v", err)
+	}
+}
+
+// The same applies to reading and finishing: the id alone must not be enough.
+func TestReadingAndFinishingNeedTheNonce(t *testing.T) {
+	h := newHarness(t, nil)
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	if _, err := h.svc.Get(context.Background(), s.ID, "wrong"); !errors.Is(err, ErrWrongNonce) {
+		t.Errorf("Get() error = %v, want ErrWrongNonce", err)
+	}
+	if _, err := h.svc.Complete(context.Background(), s.ID, "wrong"); !errors.Is(err, ErrWrongNonce) {
+		t.Errorf("Complete() error = %v, want ErrWrongNonce", err)
+	}
+	if _, err := h.svc.Get(context.Background(), s.ID, ""); !errors.Is(err, ErrWrongNonce) {
+		t.Errorf("Get() with no nonce error = %v, want ErrWrongNonce", err)
+	}
+
+	if _, err := h.svc.Get(context.Background(), s.ID, s.Nonce); err != nil {
+		t.Errorf("Get() refused the real nonce: %v", err)
+	}
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 
-	if _, err := h.svc.Get(context.Background(), "no-such-session"); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := h.svc.Get(context.Background(), "no-such-session", "n"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("Get() error = %v, want ErrSessionNotFound", err)
 	}
 	if _, err := h.sendFrame(t, "no-such-session", 1, "n", 1); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("SubmitFrame() error = %v, want ErrSessionNotFound", err)
 	}
-	if _, err := h.svc.Complete(context.Background(), "no-such-session"); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := h.svc.Complete(context.Background(), "no-such-session", "n"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("Complete() error = %v, want ErrSessionNotFound", err)
 	}
 }

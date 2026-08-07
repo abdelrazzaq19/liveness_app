@@ -93,25 +93,14 @@ func TestAGoodFramePasses(t *testing.T) {
 	g := testGuard()
 	s := guardedSession(t)
 
-	if err := g.Check(s, Frame{Seq: 1, Nonce: s.Nonce, PHash: 0xAAAA}, liveFace()); err != nil {
+	if err := g.Check(s, Frame{Seq: 1, PHash: 0xAAAA}, liveFace()); err != nil {
 		t.Fatalf("Check() rejected a good frame: %v", err)
 	}
 }
 
-// --- defence 2: the nonce ties frames to the session they were issued for ---
-
-func TestNonceMismatchIsRejected(t *testing.T) {
-	g := testGuard()
-	s := guardedSession(t)
-
-	err := g.Check(s, Frame{Seq: 1, Nonce: "someone-elses-nonce", PHash: 1}, liveFace())
-	if !errors.Is(err, ErrNonceMismatch) {
-		t.Errorf("Check() error = %v, want ErrNonceMismatch", err)
-	}
-	if !Fatal(err) {
-		t.Error("a nonce mismatch is not fatal; it should be")
-	}
-}
+// The nonce is checked by the service before any of this runs, as
+// authorisation rather than as a replay defence — see
+// TestAWrongNonceIsRefusedWithoutTouchingTheSession.
 
 // --- defence 2: sequence numbers must strictly increase ---
 
@@ -136,7 +125,7 @@ func TestSequenceMustIncrease(t *testing.T) {
 			s := guardedSession(t)
 			s.LastSeq = tt.lastSeq
 
-			err := g.Check(s, Frame{Seq: tt.seq, Nonce: s.Nonce, PHash: 0x1234}, liveFace())
+			err := g.Check(s, Frame{Seq: tt.seq, PHash: 0x1234}, liveFace())
 			if tt.wantErr {
 				if !errors.Is(err, ErrSequenceReplay) {
 					t.Errorf("Check() error = %v, want ErrSequenceReplay", err)
@@ -158,14 +147,14 @@ func TestASingleDuplicateIsRecoverable(t *testing.T) {
 	g := testGuard()
 	s := guardedSession(t)
 
-	first := Frame{Seq: 1, Nonce: s.Nonce, PHash: 0x0F0F0F0F0F0F0F0F}
+	first := Frame{Seq: 1, PHash: 0x0F0F0F0F0F0F0F0F}
 	if err := g.Check(s, first, liveFace()); err != nil {
 		t.Fatalf("Check() rejected the first frame: %v", err)
 	}
 	g.Record(s, first, liveFace())
 
 	// One bit different: well inside the duplicate threshold.
-	repeat := Frame{Seq: 2, Nonce: s.Nonce, PHash: first.PHash ^ 1}
+	repeat := Frame{Seq: 2, PHash: first.PHash ^ 1}
 
 	err := g.Check(s, repeat, liveFace())
 	if !errors.Is(err, ErrDuplicateFrame) {
@@ -185,7 +174,7 @@ func TestALongRunOfIdenticalFramesFailsTheSession(t *testing.T) {
 	var lastErr error
 
 	for seq := int64(1); seq <= int64(g.MaxDuplicateStreak)+2; seq++ {
-		f := Frame{Seq: seq, Nonce: s.Nonce, PHash: still}
+		f := Frame{Seq: seq, PHash: still}
 
 		lastErr = g.Check(s, f, liveFace())
 		if errors.Is(lastErr, ErrStaticReplay) {
@@ -209,7 +198,7 @@ func TestMovementClearsTheDuplicateStreak(t *testing.T) {
 
 	still := uint64(0x0F0F0F0F0F0F0F0F)
 	for seq := int64(1); seq <= 3; seq++ {
-		f := Frame{Seq: seq, Nonce: s.Nonce, PHash: still}
+		f := Frame{Seq: seq, PHash: still}
 		_ = g.Check(s, f, liveFace())
 		g.Record(s, f, liveFace())
 	}
@@ -217,7 +206,7 @@ func TestMovementClearsTheDuplicateStreak(t *testing.T) {
 		t.Fatal("three identical frames did not build a streak")
 	}
 
-	moved := Frame{Seq: 10, Nonce: s.Nonce, PHash: ^still}
+	moved := Frame{Seq: 10, PHash: ^still}
 	if err := g.Check(s, moved, liveFace()); err != nil {
 		t.Fatalf("Check() rejected a clearly different frame: %v", err)
 	}
@@ -251,7 +240,7 @@ func TestLowLivenessScoreFailsTheSession(t *testing.T) {
 			face := liveFace()
 			face.LivenessScore = tt.score
 
-			err := g.Check(s, Frame{Seq: 1, Nonce: s.Nonce, PHash: 0x99}, face)
+			err := g.Check(s, Frame{Seq: 1, PHash: 0x99}, face)
 			if tt.wantErr {
 				if !errors.Is(err, ErrSpoofDetected) {
 					t.Errorf("Check() error = %v, want ErrSpoofDetected", err)
@@ -277,7 +266,7 @@ func TestSpoofErrorDoesNotLeakTheScore(t *testing.T) {
 	face := liveFace()
 	face.LivenessScore = 0.4213
 
-	err := g.Check(s, Frame{Seq: 1, Nonce: s.Nonce, PHash: 1}, face)
+	err := g.Check(s, Frame{Seq: 1, PHash: 1}, face)
 	if err == nil {
 		t.Fatal("Check() accepted a spoof")
 	}
@@ -317,7 +306,7 @@ func TestIdentityMustHoldAcrossKeyFrames(t *testing.T) {
 			face := liveFace()
 			face.Embedding = embeddingAt(tt.cosine)
 
-			err := g.Check(s, Frame{Seq: 1, Nonce: s.Nonce, PHash: 0x77}, face)
+			err := g.Check(s, Frame{Seq: 1, PHash: 0x77}, face)
 			if tt.wantErr {
 				if !errors.Is(err, ErrIdentityChanged) {
 					t.Errorf("Check() error = %v, want ErrIdentityChanged", err)
@@ -342,7 +331,7 @@ func TestFramesWithoutAnEmbeddingSkipTheIdentityCheck(t *testing.T) {
 	s.ReferenceEmbedding = referenceEmbedding()
 
 	face := liveFace() // no embedding
-	if err := g.Check(s, Frame{Seq: 1, Nonce: s.Nonce, PHash: 0x55}, face); err != nil {
+	if err := g.Check(s, Frame{Seq: 1, PHash: 0x55}, face); err != nil {
 		t.Errorf("Check() rejected an ordinary frame: %v", err)
 	}
 }
@@ -354,7 +343,7 @@ func TestTheFirstKeyFrameBecomesTheReference(t *testing.T) {
 	face := liveFace()
 	face.Embedding = embeddingAt(1)
 
-	f := Frame{Seq: 1, Nonce: s.Nonce, PHash: 0x11}
+	f := Frame{Seq: 1, PHash: 0x11}
 	if err := g.Check(s, f, face); err != nil {
 		t.Fatalf("Check() rejected the first key frame: %v", err)
 	}
@@ -369,7 +358,7 @@ func TestTheFirstKeyFrameBecomesTheReference(t *testing.T) {
 	second := liveFace()
 	second.Embedding = embeddingAt(0.9)
 
-	f2 := Frame{Seq: 2, Nonce: s.Nonce, PHash: 0x22}
+	f2 := Frame{Seq: 2, PHash: 0x22}
 	g.Record(s, f2, second)
 
 	if c := s.ReferenceEmbedding.Cosine(embeddingAt(1)); math.Abs(c-1) > 1e-6 {
@@ -386,7 +375,7 @@ func TestRecordBoundsTheHashHistory(t *testing.T) {
 
 	for seq := int64(1); seq <= 20; seq++ {
 		// Hashes far apart so none counts as a duplicate.
-		f := Frame{Seq: seq, Nonce: s.Nonce, PHash: uint64(seq) * 0x1111111111111111}
+		f := Frame{Seq: seq, PHash: uint64(seq) * 0x1111111111111111}
 		g.Record(s, f, liveFace())
 	}
 
@@ -405,7 +394,6 @@ func TestFatalClassification(t *testing.T) {
 	}{
 		{nil, false},
 		{ErrDuplicateFrame, false},
-		{ErrNonceMismatch, true},
 		{ErrSequenceReplay, true},
 		{ErrStaticReplay, true},
 		{ErrSpoofDetected, true},

@@ -23,6 +23,9 @@ func testConfig() *config.Config {
 			RequestTimeout:  2 * time.Second,
 			ShutdownTimeout: time.Second,
 			APIKeys:         []config.Secret{"key-one", "key-two"},
+			// High enough that a test sending many requests from one address
+			// is not measuring the rate limiter by accident.
+			RateLimitPerMin: 100_000,
 		},
 		Log: config.Log{Level: slog.LevelDebug, Format: "json"},
 	}
