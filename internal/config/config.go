@@ -169,6 +169,10 @@ type Liveness struct {
 	ChallengeTimeout time.Duration
 	ChallengeCount   int
 
+	// MaxChallengeRetries is how many challenge attempts may be restarted after
+	// running out of time, across the whole session.
+	MaxChallengeRetries int
+
 	MinDetectionScore float64
 	MinScore          float64
 
@@ -263,18 +267,19 @@ func load(getenv func(string) string) (*Config, error) {
 			PHashMinDistance: l.intRange("LV_IMG_PHASH_MIN_DISTANCE", 5, 0, 64),
 		},
 		Liveness: Liveness{
-			SessionTTL:        l.duration("LV_LIVENESS_SESSION_TTL", 90*time.Second, 10*time.Second, 10*time.Minute),
-			ChallengeTimeout:  l.duration("LV_LIVENESS_CHALLENGE_TIMEOUT", 5*time.Second, 3*time.Second, 5*time.Minute),
-			ChallengeCount:    l.intRange("LV_LIVENESS_CHALLENGE_COUNT", 3, 1, 5),
-			MinDetectionScore: l.float("LV_LIVENESS_MIN_DETECTION_SCORE", 0.60, 0, 1),
-			MinScore:          l.float("LV_LIVENESS_MIN_SCORE", 0.80, 0, 1),
-			EARBlink:          l.float("LV_LIVENESS_EAR_BLINK", 0.21, 0, 1),
-			EAROpen:           l.float("LV_LIVENESS_EAR_OPEN", 0.30, 0, 1),
-			BlinkMinFrames:    l.intRange("LV_LIVENESS_BLINK_MIN_FRAMES", 2, 1, 30),
-			YawTurnDeg:        l.float("LV_LIVENESS_YAW_TURN_DEG", 25, 5, 89),
-			PitchNodDeg:       l.float("LV_LIVENESS_PITCH_NOD_DEG", 15, 5, 89),
-			MARMouthOpen:      l.float("LV_LIVENESS_MAR_MOUTH_OPEN", 0.55, 0, 5),
-			IdentityCosineMin: l.float("LV_LIVENESS_IDENTITY_COSINE_MIN", 0.70, 0, 1),
+			SessionTTL:          l.duration("LV_LIVENESS_SESSION_TTL", 90*time.Second, 10*time.Second, 10*time.Minute),
+			ChallengeTimeout:    l.duration("LV_LIVENESS_CHALLENGE_TIMEOUT", 5*time.Second, 3*time.Second, 5*time.Minute),
+			ChallengeCount:      l.intRange("LV_LIVENESS_CHALLENGE_COUNT", 3, 1, 5),
+			MaxChallengeRetries: l.intRange("LV_LIVENESS_MAX_RETRIES", 2, 0, 5),
+			MinDetectionScore:   l.float("LV_LIVENESS_MIN_DETECTION_SCORE", 0.60, 0, 1),
+			MinScore:            l.float("LV_LIVENESS_MIN_SCORE", 0.80, 0, 1),
+			EARBlink:            l.float("LV_LIVENESS_EAR_BLINK", 0.21, 0, 1),
+			EAROpen:             l.float("LV_LIVENESS_EAR_OPEN", 0.30, 0, 1),
+			BlinkMinFrames:      l.intRange("LV_LIVENESS_BLINK_MIN_FRAMES", 2, 1, 30),
+			YawTurnDeg:          l.float("LV_LIVENESS_YAW_TURN_DEG", 25, 5, 89),
+			PitchNodDeg:         l.float("LV_LIVENESS_PITCH_NOD_DEG", 15, 5, 89),
+			MARMouthOpen:        l.float("LV_LIVENESS_MAR_MOUTH_OPEN", 0.55, 0, 5),
+			IdentityCosineMin:   l.float("LV_LIVENESS_IDENTITY_COSINE_MIN", 0.70, 0, 1),
 		},
 		Enrollment: Enrollment{
 			MatchCosineMin:     l.float("LV_ENROLL_MATCH_COSINE_MIN", 0.42, 0, 1),
@@ -302,11 +307,17 @@ func load(getenv func(string) string) (*Config, error) {
 func (l *loader) crossValidate(c *Config) {
 	// A session that cannot fit its own challenges will always expire, and the
 	// failure looks like a model problem rather than a configuration one.
-	budget := time.Duration(c.Liveness.ChallengeCount) * c.Liveness.ChallengeTimeout
+	//
+	// Retries are counted in, because the retry budget is worth nothing if the
+	// session lifetime cannot hold it: the subject would be granted attempts
+	// that the TTL then refuses to let them use.
+	attempts := c.Liveness.ChallengeCount + c.Liveness.MaxChallengeRetries
+	budget := time.Duration(attempts) * c.Liveness.ChallengeTimeout
 	if budget > c.Liveness.SessionTTL {
 		l.errs = append(l.errs, fmt.Errorf(
-			"LV_LIVENESS_SESSION_TTL: %s is shorter than LV_LIVENESS_CHALLENGE_COUNT (%d) x LV_LIVENESS_CHALLENGE_TIMEOUT (%s) = %s",
-			c.Liveness.SessionTTL, c.Liveness.ChallengeCount, c.Liveness.ChallengeTimeout, budget))
+			"LV_LIVENESS_SESSION_TTL: %s is shorter than (LV_LIVENESS_CHALLENGE_COUNT %d + LV_LIVENESS_MAX_RETRIES %d) x LV_LIVENESS_CHALLENGE_TIMEOUT (%s) = %s",
+			c.Liveness.SessionTTL, c.Liveness.ChallengeCount, c.Liveness.MaxChallengeRetries,
+			c.Liveness.ChallengeTimeout, budget))
 	}
 
 	// If the connection write deadline fires first, the client sees a dropped

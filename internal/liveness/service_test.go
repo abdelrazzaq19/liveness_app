@@ -827,6 +827,173 @@ func TestALongStillStreakStillFailsEvenWhileSatisfying(t *testing.T) {
 	}
 }
 
+// Running out of time on one step used to throw away every step already
+// passed. It now restarts that step alone, while the budget lasts.
+func TestARunOutStepIsRetriedWithoutLosingProgress(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Config.MaxChallengeRetries = 2 })
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	stored, _ := h.repo.Get(context.Background(), s.ID)
+	stored.Challenges = []ChallengeKind{ChallengeMouthOpen, ChallengeBlink}
+	stored.Current = 0
+	_ = h.repo.Update(context.Background(), stored)
+
+	// First step passed.
+	h.analyzer.faces = []biometric.Face{{MAR: 0.90, LivenessScore: 0.95}}
+	first, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x1111_2222_3333_4444)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if !first.Advanced {
+		t.Fatalf("the first step did not pass: %+v", first)
+	}
+
+	// Now let the second step's deadline run out.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+	h.clock.Advance(21 * time.Second)
+
+	got, err := h.sendFrame(t, s.ID, 2, s.Nonce, 0x5555_6666_7777_8888)
+	if err != nil {
+		t.Fatalf("SubmitFrame() after the deadline returned an error: %v", err)
+	}
+
+	if !got.Retried {
+		t.Errorf("the step was not retried: %+v", got)
+	}
+	if got.State == StateExpired || got.State == StateFailed {
+		t.Errorf("state = %s; the session was ended instead of the step being retried", got.State)
+	}
+	if got.Challenge != ChallengeBlink {
+		t.Errorf("challenge = %s, want the same one to be retried (%s)", got.Challenge, ChallengeBlink)
+	}
+	if got.RetriesLeft != 1 {
+		t.Errorf("retries left = %d, want 1", got.RetriesLeft)
+	}
+
+	// The step already passed is still passed: one challenge left, not two.
+	if got.Remaining != 1 {
+		t.Errorf("remaining = %d, want 1; the completed step was lost", got.Remaining)
+	}
+	if got.SecondsRemaining <= 0 {
+		t.Errorf("seconds remaining = %v, want a fresh deadline", got.SecondsRemaining)
+	}
+}
+
+// A retry must not carry progress across. Otherwise a subject could shut their
+// eyes in one attempt and open them in the next, satisfying a blink that
+// happened in neither.
+func TestARetryStartsTheStepFromNothing(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Config.MaxChallengeRetries = 1 })
+
+	s, _ := h.svc.Start(context.Background())
+	stored, _ := h.repo.Get(context.Background(), s.ID)
+	stored.Challenges = []ChallengeKind{ChallengeBlink}
+	stored.Current = 0
+	_ = h.repo.Update(context.Background(), stored)
+
+	// Eyes shut for long enough to count.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.10, LivenessScore: 0.95}}
+	for seq := int64(1); seq <= 3; seq++ {
+		if _, err := h.sendFrame(t, s.ID, seq, s.Nonce, uint64(seq)*0x1111_1111_1111_1111); err != nil {
+			t.Fatalf("SubmitFrame() seq %d: %v", seq, err)
+		}
+	}
+
+	before, _ := h.repo.Get(context.Background(), s.ID)
+	if !before.Progress.SawClose {
+		t.Fatal("the test did not manage to record a closed eye, so it proves nothing")
+	}
+
+	// Time runs out, then the eyes open on the new attempt.
+	h.clock.Advance(21 * time.Second)
+	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+
+	if _, err := h.sendFrame(t, s.ID, 4, s.Nonce, 0xAAAA_BBBB_CCCC_DDDD); err != nil {
+		t.Fatalf("SubmitFrame() at the retry: %v", err)
+	}
+
+	after, _ := h.repo.Get(context.Background(), s.ID)
+	if after.Progress.SawClose || after.Progress.ClosedFrames != 0 {
+		t.Errorf("progress survived the retry: %+v", after.Progress)
+	}
+
+	// Opening the eyes now must not complete a blink that never happened.
+	got, err := h.sendFrame(t, s.ID, 5, s.Nonce, 0xEEEE_FFFF_0000_1111)
+	if err != nil {
+		t.Fatalf("SubmitFrame() after the retry: %v", err)
+	}
+	if got.Advanced {
+		t.Error("opening the eyes completed a blink that spanned two attempts")
+	}
+}
+
+// The budget has to run out, or the challenge sequence becomes a guessing game
+// with no cost for guessing wrong.
+func TestRetriesRunOutAndThenTheSessionEnds(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Config.MaxChallengeRetries = 1 })
+
+	s, _ := h.svc.Start(context.Background())
+	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+
+	h.clock.Advance(21 * time.Second)
+	got, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x0102_0304_0506_0708)
+	if err != nil {
+		t.Fatalf("the first overrun should have been retried, got: %v", err)
+	}
+	if !got.Retried || got.RetriesLeft != 0 {
+		t.Fatalf("first overrun: %+v, want a retry with none left", got)
+	}
+
+	h.clock.Advance(21 * time.Second)
+	if _, err := h.sendFrame(t, s.ID, 2, s.Nonce, 0x0807_0605_0403_0201); !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("second overrun error = %v, want ErrSessionExpired", err)
+	}
+
+	final, _ := h.repo.Get(context.Background(), s.ID)
+	if final.State != StateExpired {
+		t.Errorf("state = %s, want %s", final.State, StateExpired)
+	}
+}
+
+// The session's own lifetime is the ceiling, and no retry budget may raise it.
+func TestTheSessionTTLIgnoresTheRetryBudget(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Config.MaxChallengeRetries = 5 })
+
+	s, _ := h.svc.Start(context.Background())
+	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+
+	// Past the 90 second TTL, with retries still unspent.
+	h.clock.Advance(91 * time.Second)
+
+	if _, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x1212_3434_5656_7878); !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("error = %v, want ErrSessionExpired even with retries left", err)
+	}
+}
+
+// Reading the status must not be what spends a retry, or a client that polls
+// would burn the budget without the subject doing anything.
+func TestReadingTheStatusDoesNotEndARecoverableSession(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Config.MaxChallengeRetries = 2 })
+
+	s, _ := h.svc.Start(context.Background())
+	h.clock.Advance(21 * time.Second)
+
+	got, err := h.svc.Get(context.Background(), s.ID, s.Nonce)
+	if err != nil {
+		t.Fatalf("Get() returned an unexpected error: %v", err)
+	}
+	if got.State.Terminal() {
+		t.Errorf("state = %s; reading the status ended a session that still had retries", got.State)
+	}
+	if got.Retries != 0 {
+		t.Errorf("retries = %d, want 0; reading the status spent one", got.Retries)
+	}
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 

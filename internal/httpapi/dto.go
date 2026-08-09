@@ -66,6 +66,15 @@ type submitFrameResponse struct {
 	Completed bool   `json:"completed"`
 	Remaining int    `json:"remaining"`
 
+	// Retried says the step ran out of time and was restarted rather than
+	// ending the session, and RetriesLeft says how many restarts are left.
+	//
+	// Safe to tell the client, unlike a threshold or a score: it describes the
+	// session's own budget, which the subject is entitled to know and which
+	// reveals nothing about how any defence decides.
+	Retried     bool `json:"retried"`
+	RetriesLeft int  `json:"retries_left"`
+
 	// SecondsRemaining drives the countdown. A duration rather than a deadline:
 	// a client with a skewed clock would render an absolute time wrongly, while
 	// a countdown refreshed several times a second cannot drift far.
@@ -83,6 +92,8 @@ func newSubmitFrameResponse(r liveness.FrameResult) submitFrameResponse {
 		Advanced:         r.Advanced,
 		Completed:        r.Completed,
 		Remaining:        r.Remaining,
+		Retried:          r.Retried,
+		RetriesLeft:      r.RetriesLeft,
 		SecondsRemaining: r.SecondsRemaining,
 		Reason:           r.Reason,
 	}

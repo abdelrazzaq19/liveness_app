@@ -93,9 +93,10 @@ func build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*app, err
 		Entropy: rand.Reader,
 		Logger:  log,
 		Config: liveness.Config{
-			TTL:              cfg.Liveness.SessionTTL,
-			ChallengeTimeout: cfg.Liveness.ChallengeTimeout,
-			ChallengeCount:   cfg.Liveness.ChallengeCount,
+			TTL:                 cfg.Liveness.SessionTTL,
+			ChallengeTimeout:    cfg.Liveness.ChallengeTimeout,
+			ChallengeCount:      cfg.Liveness.ChallengeCount,
+			MaxChallengeRetries: cfg.Liveness.MaxChallengeRetries,
 
 			// The embedder is 71% of the pipeline. Re-checking identity every
 			// fifth frame keeps the guarantee without the cost.

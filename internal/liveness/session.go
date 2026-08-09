@@ -132,6 +132,15 @@ type Session struct {
 
 	Progress Progress `json:"progress"`
 
+	// Retries counts challenge attempts restarted after their deadline ran out.
+	//
+	// Counted for the whole session rather than per challenge, and bounded. A
+	// retry hands an attacker another attempt at the same instruction, so the
+	// budget is what keeps a challenge sequence from degrading into "keep
+	// trying until something works". The session TTL is the second bound, and
+	// neither can be spent past the other.
+	Retries int `json:"retries"`
+
 	// FailureReason is set when the session fails, for the audit trail. It is
 	// never sent to the client, which learns only that verification failed.
 	FailureReason string `json:"failure_reason,omitempty"`
@@ -229,14 +238,50 @@ func (s *Session) SecondsRemaining(now time.Time) float64 {
 	return left
 }
 
+// SessionExpired reports whether the session's own lifetime has run out.
+//
+// This is the hard ceiling. Nothing recovers from it: it bounds the total time
+// an attacker has to work with, so no amount of retry budget may extend it.
+func (s *Session) SessionExpired(now time.Time) bool {
+	return now.After(s.ExpiresAt)
+}
+
+// ChallengeExpired reports whether the active challenge ran out of time.
+//
+// Kept separate from SessionExpired because they mean different things: this
+// one is recoverable while retries remain, and the other never is. Collapsing
+// them, which is how this started, made every missed challenge fatal.
+func (s *Session) ChallengeExpired(now time.Time) bool {
+	// A challenge deadline only applies while one is being attempted.
+	return !s.State.Terminal() && !s.AllComplete() && now.After(s.ChallengeDeadline)
+}
+
 // Expired reports whether the session or its current challenge has run out of
 // time.
 func (s *Session) Expired(now time.Time) bool {
-	if now.After(s.ExpiresAt) {
-		return true
+	return s.SessionExpired(now) || s.ChallengeExpired(now)
+}
+
+// RetryChallenge restarts the active challenge on a fresh deadline.
+//
+// Progress is cleared, and that is the point rather than tidiness: carrying it
+// over would let a subject shut their eyes in one attempt and open them in the
+// next, satisfying a blink that never happened in either. The replay state —
+// sequence number, frame hashes, reference embedding — is deliberately kept,
+// because none of it belongs to the challenge.
+func (s *Session) RetryChallenge(now time.Time, challengeTimeout time.Duration) error {
+	if s.State.Terminal() {
+		return fmt.Errorf("%w: state %s", ErrSessionFinished, s.State)
 	}
-	// A challenge deadline only applies while one is being attempted.
-	return !s.State.Terminal() && !s.AllComplete() && now.After(s.ChallengeDeadline)
+	if s.AllComplete() {
+		return nil
+	}
+
+	s.Retries++
+	s.Progress = Progress{}
+	s.ChallengeDeadline = now.Add(challengeTimeout)
+	s.Version++
+	return nil
 }
 
 // Begin moves a pending session into progress.

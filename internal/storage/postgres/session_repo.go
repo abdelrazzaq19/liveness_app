@@ -32,7 +32,7 @@ const sessionColumns = `
 	id, nonce, state, challenges, current_index,
 	created_at, expires_at, challenge_deadline,
 	last_seq, recent_hashes, duplicate_streak,
-	reference_embedding, progress, failure_reason, version`
+	reference_embedding, progress, failure_reason, retries, version`
 
 // Create inserts a new session.
 func (r *SessionRepo) Create(ctx context.Context, s *liveness.Session) error {
@@ -43,14 +43,14 @@ func (r *SessionRepo) Create(ctx context.Context, s *liveness.Session) error {
 
 	const query = `
 		INSERT INTO liveness_sessions (` + sessionColumns + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`
 
 	_, err = r.db.Pool.Exec(ctx, query,
 		string(s.ID), s.Nonce, string(s.State),
 		challengesToText(s.Challenges), s.Current,
 		s.CreatedAt, s.ExpiresAt, s.ChallengeDeadline,
 		s.LastSeq, hashesToInt64(s.RecentHashes), s.DuplicateStreak,
-		embeddingToFloat32(s.ReferenceEmbedding), progress, s.FailureReason, s.Version,
+		embeddingToFloat32(s.ReferenceEmbedding), progress, s.FailureReason, s.Retries, s.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: insert session %s: %w", s.ID, err)
@@ -89,14 +89,14 @@ func (r *SessionRepo) Update(ctx context.Context, s *liveness.Session) error {
 			state = $2, current_index = $3, challenge_deadline = $4,
 			last_seq = $5, recent_hashes = $6, duplicate_streak = $7,
 			reference_embedding = $8, progress = $9, failure_reason = $10,
-			version = $11
-		WHERE id = $1 AND version <= $11`
+			retries = $11, version = $12
+		WHERE id = $1 AND version <= $12`
 
 	tag, err := r.db.Pool.Exec(ctx, query,
 		string(s.ID), string(s.State), s.Current, s.ChallengeDeadline,
 		s.LastSeq, hashesToInt64(s.RecentHashes), s.DuplicateStreak,
 		embeddingToFloat32(s.ReferenceEmbedding), progress, s.FailureReason,
-		s.Version,
+		s.Retries, s.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: update session %s: %w", s.ID, err)
@@ -159,7 +159,7 @@ func scanSession(row pgx.Row) (*liveness.Session, error) {
 		&id, &s.Nonce, &state, &challenges, &s.Current,
 		&s.CreatedAt, &s.ExpiresAt, &s.ChallengeDeadline,
 		&s.LastSeq, &hashes, &s.DuplicateStreak,
-		&embedding, &progress, &s.FailureReason, &s.Version,
+		&embedding, &progress, &s.FailureReason, &s.Retries, &s.Version,
 	)
 	if err != nil {
 		return nil, err

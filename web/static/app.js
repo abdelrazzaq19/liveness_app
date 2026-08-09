@@ -204,6 +204,34 @@ function showPass(finished, next) {
   }, PASS_MS);
 }
 
+// showRetry says the step ran out of time and is starting again.
+//
+// It behaves like the between-steps confirmation rather than like a verdict:
+// the session is still alive, the new attempt's clock is already running, and
+// frames stay paused so the fresh attempt does not take its baseline from a
+// subject still finishing the movement that ran out of time.
+function showRetry(kind, left) {
+  const step = INSTRUCTIONS[kind];
+
+  els.pass.classList.add('bad');
+  els.passMark.textContent = '↻';
+  els.passTitle.textContent = 'Waktu habis — ulangi langkah ini';
+  els.passNext.textContent = left > 0
+    ? `${step ? step.text : 'Langkah ini'}. Sisa ${left} kesempatan.`
+    : `${step ? step.text : 'Langkah ini'}. Kesempatan terakhir.`;
+  els.passAction.hidden = true;
+  els.pass.hidden = false;
+
+  state.settleUntil = performance.now() + PASS_MS + SETTLE_MS;
+
+  if (state.passTimer) clearTimeout(state.passTimer);
+  state.passTimer = setTimeout(() => {
+    els.pass.hidden = true;
+    els.pass.classList.remove('bad');
+    state.passTimer = null;
+  }, PASS_MS);
+}
+
 // showResult ends the session on screen and waits to be acknowledged.
 //
 // Unlike the between-steps confirmation it does not dismiss itself: the session
@@ -325,7 +353,10 @@ async function sendFrame() {
     if (res.challenge) showChallenge(res.challenge, res.seconds_remaining);
     else syncCountdown(res.seconds_remaining);
 
-    if (res.advanced) {
+    if (res.retried) {
+      showRetry(res.challenge, res.retries_left);
+      setStatus('Waktu langkah ini habis. Mengulang langkah yang sama.', 'warn');
+    } else if (res.advanced) {
       showPass(finished, res.challenge);
       setStatus('Bagus.', 'ok');
     } else if (res.reason) {

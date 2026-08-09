@@ -53,6 +53,15 @@ type Config struct {
 	ChallengeTimeout time.Duration
 	ChallengeCount   int
 
+	// MaxChallengeRetries is how many times a challenge whose deadline elapsed
+	// may be restarted before the session is given up on.
+	//
+	// Zero restores the original behaviour, where missing one challenge ends
+	// everything. It is bounded because each retry is another attempt at the
+	// same instruction, and an unbounded budget turns a challenge-response
+	// protocol into a guessing game with no cost for guessing wrong.
+	MaxChallengeRetries int
+
 	// KeyFrameInterval is how often a frame gets an embedding.
 	//
 	// Embedding is by far the heaviest stage — measured at 71% of the whole
@@ -75,6 +84,9 @@ func (c Config) validate() error {
 	}
 	if c.KeyFrameInterval < 1 {
 		problems = append(problems, fmt.Errorf("KeyFrameInterval must be at least 1, got %d", c.KeyFrameInterval))
+	}
+	if c.MaxChallengeRetries < 0 {
+		problems = append(problems, fmt.Errorf("MaxChallengeRetries cannot be negative, got %d", c.MaxChallengeRetries))
 	}
 	return errors.Join(problems...)
 }
@@ -177,6 +189,13 @@ type FrameResult struct {
 	Completed bool          `json:"completed"`
 	Remaining int           `json:"remaining"`
 
+	// Retried reports that the challenge ran out of time and was restarted on a
+	// fresh deadline rather than ending the session.
+	Retried bool `json:"retried"`
+
+	// RetriesLeft is how many further restarts the session may still spend.
+	RetriesLeft int `json:"retries_left"`
+
 	// SecondsRemaining is how long is left on the current challenge.
 	//
 	// Sent as a duration rather than as a deadline on purpose. A client with a
@@ -194,12 +213,45 @@ type FrameResult struct {
 // progressResult builds the part of a result that describes where the session
 // stands, so every return path reports the same thing.
 func (s *Service) progressResult(session *Session, now time.Time) FrameResult {
+	left := s.deps.Config.MaxChallengeRetries - session.Retries
+	if left < 0 {
+		left = 0
+	}
+
 	return FrameResult{
 		State:            session.State,
 		Challenge:        session.ActiveChallenge(),
 		Remaining:        session.Remaining(),
+		RetriesLeft:      left,
 		SecondsRemaining: session.SecondsRemaining(now),
 	}
+}
+
+// retryChallenge restarts the active challenge after its deadline elapsed.
+//
+// The frame that triggered this is deliberately not evaluated. It was captured
+// during the attempt that just ended, so the subject may be halfway through a
+// movement — and for the turn and nod challenges the first frame of an attempt
+// becomes the baseline everything is measured against. Letting it through would
+// hand the new attempt a baseline taken mid-turn.
+func (s *Service) retryChallenge(ctx context.Context, session *Session, now time.Time) (FrameResult, error) {
+	kind := session.ActiveChallenge()
+
+	if err := session.RetryChallenge(now, s.deps.Config.ChallengeTimeout); err != nil {
+		return FrameResult{}, err
+	}
+
+	s.deps.Logger.InfoContext(ctx, "liveness challenge retried",
+		slog.String("session_id", session.ID.String()),
+		slog.String("challenge", string(kind)),
+		slog.Int("retries_used", session.Retries),
+		slog.Int("retries_allowed", s.deps.Config.MaxChallengeRetries),
+	)
+
+	result := s.progressResult(session, now)
+	result.Retried = true
+	result.Reason = "time ran out for that step; try it once more"
+	return s.save(ctx, session, result)
 }
 
 // SubmitFrame evaluates one frame against the active challenge.
@@ -227,8 +279,16 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 	if session.State.Terminal() {
 		return FrameResult{State: session.State}, fmt.Errorf("%w: state %s", ErrSessionFinished, session.State)
 	}
-	if session.Expired(now) {
+	// The session's own lifetime is the hard ceiling and nothing recovers from
+	// it, so it is checked before the retry budget is consulted at all.
+	if session.SessionExpired(now) {
 		return s.endSession(ctx, session, now, expireSession, "")
+	}
+	if session.ChallengeExpired(now) {
+		if session.Retries >= s.deps.Config.MaxChallengeRetries {
+			return s.endSession(ctx, session, now, expireSession, "")
+		}
+		return s.retryChallenge(ctx, session, now)
 	}
 	if err := session.Begin(now); err != nil {
 		return FrameResult{}, err
@@ -385,7 +445,11 @@ func (s *Service) Get(ctx context.Context, id SessionID, nonce string) (*Session
 
 	// An expired session that nobody has touched still reads as in progress
 	// until someone looks at it.
-	if !session.State.Terminal() && session.Expired(s.deps.Clock.Now()) {
+	//
+	// Only the session's own lifetime ends it here. A challenge deadline that
+	// elapsed may still be recoverable, and deciding that is the frame path's
+	// job — reading the status must not be what burns a retry.
+	if !session.State.Terminal() && session.SessionExpired(s.deps.Clock.Now()) {
 		if _, err := s.endSession(ctx, session, s.deps.Clock.Now(), expireSession, ""); err != nil &&
 			!errors.Is(err, ErrSessionExpired) {
 			return nil, err
