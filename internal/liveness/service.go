@@ -336,6 +336,36 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		return s.save(ctx, session, result)
 	}
 
+	// Logged here, before anything branches on these numbers.
+	//
+	// Twice now this sat further down and hid the very failure being chased:
+	// once after the analysis error check, so frames rejected for quality left
+	// no trace, and once after the guard, so frames failed as spoofs left none
+	// either. A measurement log that only runs when nothing went wrong is a
+	// measurement log for the case nobody needs it.
+	//
+	// Scalars only. The rule against logging biometric data is not relaxed for
+	// debugging: no frames, no embeddings, no landmark coordinates. These
+	// numbers describe a moment, not a person, and none identifies anyone.
+	if s.deps.Logger.Enabled(ctx, slog.LevelDebug) {
+		s.deps.Logger.DebugContext(ctx, "frame measured",
+			slog.String("session_id", session.ID.String()),
+			slog.Int64("seq", in.Seq),
+			slog.String("challenge", string(session.ActiveChallenge())),
+			slog.Float64("ear", face.EAR),
+			slog.Float64("mar", face.MAR),
+			slog.Float64("yaw", face.Pose.Yaw),
+			slog.Float64("pitch", face.Pose.Pitch),
+			slog.Float64("face_width", face.Box.Width()),
+			slog.Float64("detect_score", face.Score),
+
+			// Alongside the threshold it is about to be compared against, so a
+			// rejection can be read without going to look up the setting.
+			slog.Float64("liveness", face.LivenessScore),
+			slog.Float64("liveness_min", s.deps.Guard.MinLivenessScore),
+		)
+	}
+
 	// A recoverable rejection must not stop the frame being evaluated.
 	//
 	// Every challenge asks the subject to hold a pose — eyes shut, mouth open,
@@ -353,32 +383,15 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 	outcome := s.deps.Evaluator.Evaluate(session, face)
 	s.deps.Guard.Record(session, frame, face)
 
-	// What the decision was actually made from, at debug level.
-	//
-	// Without it a subject who followed the instruction and was refused anyway
-	// leaves no evidence of why, and the thresholds can only be tuned by
-	// guessing. Every default threshold is a literature figure for a different
-	// landmark scheme, so this is the only way to find out what this pipeline
-	// reports for a real face in front of a real camera.
-	//
-	// Scalars only. The rule against logging biometric data is not relaxed for
-	// debugging: no frames, no embeddings, no landmark coordinates. These
-	// numbers describe a moment, not a person, and none of them identifies
-	// anyone.
 	if s.deps.Logger.Enabled(ctx, slog.LevelDebug) {
-		s.deps.Logger.DebugContext(ctx, "frame measured",
+		s.deps.Logger.DebugContext(ctx, "challenge evaluated",
 			slog.String("session_id", session.ID.String()),
 			slog.Int64("seq", in.Seq),
 			slog.String("challenge", string(session.ActiveChallenge())),
 			slog.Bool("satisfied", outcome.Satisfied),
 			slog.String("reason", outcome.Reason),
-			slog.Float64("ear", face.EAR),
-			slog.Float64("mar", face.MAR),
-			slog.Float64("yaw", face.Pose.Yaw),
-			slog.Float64("pitch", face.Pose.Pitch),
 			slog.Float64("yaw_delta", face.Pose.Yaw-session.Progress.BaselineYaw),
 			slog.Float64("pitch_delta", face.Pose.Pitch-session.Progress.BaselinePitch),
-			slog.Float64("liveness", face.LivenessScore),
 			slog.Int("closed_frames", session.Progress.ClosedFrames),
 		)
 	}

@@ -9,6 +9,10 @@ import (
 	"math"
 	"testing"
 
+	xdraw "golang.org/x/image/draw"
+
+	ort "github.com/yalue/onnxruntime_go"
+
 	"github.com/ziad/liveness-verifier/internal/biometric"
 )
 
@@ -176,4 +180,74 @@ func flatImage(w, h int, c color.RGBA) image.Image {
 		}
 	}
 	return img
+}
+
+// TestAntiSpoofClassDistribution prints the full three-class output, because a
+// real session measured 0.006 for the live class on every frame of every
+// attempt — stable to four decimal places across different poses and lighting.
+//
+// A threshold set too high produces something like 0.7. A number pinned at
+// 0.006 regardless of the input means the score is not a judgement about the
+// pixels at all, and the only way to tell which of the three assumptions in
+// this file is wrong is to look at where the probability actually went.
+func TestAntiSpoofClassDistribution(t *testing.T) {
+	rt, path := newRealRuntime(t, antiSpoofModel)
+
+	pool, err := rt.LoadModel(ModelSpec{Name: "antispoof", Path: path, PoolSize: 1})
+	if err != nil {
+		t.Fatalf("LoadModel() returned an unexpected error: %v", err)
+	}
+
+	inputs, outputs := pool.Signature()
+	t.Logf("input  %q %v", inputs[0].Name, inputs[0].Dimensions)
+	t.Logf("output %q %v", outputs[0].Name, outputs[0].Dimensions)
+
+	frames := []struct {
+		name string
+		img  image.Image
+	}{
+		{"textured scene", syntheticScene(480, 640)},
+		{"mid grey", flatImage(480, 640, color.RGBA{R: 128, G: 128, B: 128, A: 255})},
+		{"skin-ish", flatImage(480, 640, color.RGBA{R: 222, G: 180, B: 150, A: 255})},
+		{"black", flatImage(480, 640, color.RGBA{A: 255})},
+		{"white", flatImage(480, 640, color.RGBA{R: 255, G: 255, B: 255, A: 255})},
+	}
+
+	box := biometric.BBox{MinX: 180, MinY: 240, MaxX: 300, MaxY: 400}
+
+	for _, f := range frames {
+		patch := image.NewRGBA(image.Rect(0, 0, antiSpoofInputSize, antiSpoofInputSize))
+		crop := antiSpoofCrop(box, 480, 640, antiSpoofCropScale)
+		xdraw.BiLinear.Scale(patch, patch.Bounds(), f.img, crop, xdraw.Src, nil)
+
+		var probs []float64
+		err := pool.Use(context.Background(), func(s *Session) error {
+			in, err := ort.NewTensor(ort.NewShape(1, 3, antiSpoofInputSize, antiSpoofInputSize),
+				antiSpoofPlanes(patch))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = in.Destroy() }()
+
+			outs := make([]ort.Value, 1)
+			if err := s.Run([]ort.Value{in}, outs); err != nil {
+				return err
+			}
+			defer destroyValues(outs)
+
+			raw, err := floatData(outs[0], "logits", 0)
+			if err != nil {
+				return err
+			}
+			t.Logf("%-15s raw logits % .4f", f.name, raw[:antiSpoofClasses])
+			probs = softmax(raw[:antiSpoofClasses])
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", f.name, err)
+		}
+
+		t.Logf("%-15s p0=%.4f  p1=%.4f (taken as live)  p2=%.4f",
+			f.name, probs[0], probs[1], probs[2])
+	}
 }

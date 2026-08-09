@@ -29,6 +29,10 @@ RUN git clone --depth 1 --branch "${SFAS_REF}" "${SFAS_REPO}" /opt/sfas \
  && cat /opt/sfas-commit.txt
 
 COPY tools/antispoof/convert.py /opt/convert.py
+# probe.py answers "is the score the model's own judgement, or something we do
+# to it on the way in" by running the checkpoint on inputs the Go side can
+# rebuild byte for byte.
+COPY tools/antispoof/probe.py /opt/probe.py
 
 WORKDIR /out
 ENTRYPOINT ["python", "/opt/convert.py"]
