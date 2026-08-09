@@ -260,15 +260,18 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		return s.save(ctx, session, result)
 	}
 
-	if err := s.deps.Guard.CheckAnalysis(session, frame, face); err != nil {
-		if Fatal(err) {
-			return s.endSession(ctx, session, now, failSession, err.Error())
-		}
-		s.deps.Guard.Record(session, frame, face)
-
-		result := s.progressResult(session, now)
-		result.Reason = "hold still for a moment, then follow the instruction"
-		return s.save(ctx, session, result)
+	// A recoverable rejection must not stop the frame being evaluated.
+	//
+	// Every challenge asks the subject to hold a pose — eyes shut, mouth open,
+	// head turned — and holding a pose is exactly what produces near-identical
+	// frames. Returning early here threw the satisfying frame away and left a
+	// subject doing precisely what was asked of them waiting out the clock.
+	//
+	// The still-image defence is untouched. What separates a photograph from a
+	// person holding a pose is how long the stillness lasts, and a long streak
+	// is fatal.
+	if guardErr := s.deps.Guard.CheckAnalysis(session, frame, face); Fatal(guardErr) {
+		return s.endSession(ctx, session, now, failSession, guardErr.Error())
 	}
 
 	outcome := s.deps.Evaluator.Evaluate(session, face)

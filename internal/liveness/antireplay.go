@@ -147,14 +147,13 @@ func (g Guard) CheckRequest(s *Session, f Frame) error {
 }
 
 // CheckAnalysis applies the defences that need the frame to have been analysed.
+//
+// The fatal checks come before the duplicate check, even though the duplicate
+// check is cheaper. A duplicate is recoverable and its frame still goes on to be
+// evaluated against the challenge, so it has to have cleared every other defence
+// first — otherwise holding a printed photo steady would be a way to have the
+// spoof and identity checks skipped entirely.
 func (g Guard) CheckAnalysis(s *Session, f Frame, face biometric.Face) error {
-	if g.isDuplicate(s, f.PHash) {
-		if s.DuplicateStreak+1 >= g.MaxDuplicateStreak {
-			return fmt.Errorf("%w: %d identical frames in a row", ErrStaticReplay, s.DuplicateStreak+1)
-		}
-		return ErrDuplicateFrame
-	}
-
 	if face.LivenessScore < g.MinLivenessScore {
 		// The score itself is not in the error: it goes to the audit trail, not
 		// to a client who could use it to tune an attack.
@@ -163,6 +162,13 @@ func (g Guard) CheckAnalysis(s *Session, f Frame, face biometric.Face) error {
 
 	if err := g.checkIdentity(s, face); err != nil {
 		return err
+	}
+
+	if g.isDuplicate(s, f.PHash) {
+		if s.DuplicateStreak+1 >= g.MaxDuplicateStreak {
+			return fmt.Errorf("%w: %d identical frames in a row", ErrStaticReplay, s.DuplicateStreak+1)
+		}
+		return ErrDuplicateFrame
 	}
 	return nil
 }

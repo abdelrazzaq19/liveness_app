@@ -730,6 +730,103 @@ func TestReadingAndFinishingNeedTheNonce(t *testing.T) {
 	}
 }
 
+// Every challenge asks the subject to hold a pose, and holding a pose is
+// exactly what produces near-identical frames. If the duplicate check runs
+// before the evaluator and returns early, the frame that satisfies the
+// challenge is thrown away and the subject waits out the clock doing the right
+// thing.
+func TestHoldingAPoseStillSatisfiesTheChallenge(t *testing.T) {
+	h := newHarness(t, nil)
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	// Force the mouth challenge so the test does not depend on the draw.
+	stored, err := h.repo.Get(context.Background(), s.ID)
+	if err != nil {
+		t.Fatalf("Get() returned an unexpected error: %v", err)
+	}
+	stored.Challenges = []ChallengeKind{ChallengeMouthOpen, ChallengeBlink}
+	stored.Current = 0
+	if err := h.repo.Update(context.Background(), stored); err != nil {
+		t.Fatalf("Update() returned an unexpected error: %v", err)
+	}
+
+	// The subject opens their mouth and holds it. The frames are identical
+	// because they are not moving — which is what was asked of them.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.40, MAR: 0.90, LivenessScore: 0.95}}
+
+	const held = uint64(0x0F0F_0F0F_0F0F_0F0F)
+
+	first, err := h.sendFrame(t, s.ID, 1, s.Nonce, held)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if !first.Advanced {
+		t.Fatalf("the first frame did not satisfy the challenge: %+v", first)
+	}
+
+	// Now the blink challenge, held the same way: eyes shut for several
+	// identical frames, then open.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.10, LivenessScore: 0.95}}
+	h.analyzer.calls = 0
+
+	for seq := int64(2); seq <= 4; seq++ {
+		if _, err := h.sendFrame(t, s.ID, seq, s.Nonce, held); err != nil {
+			t.Fatalf("SubmitFrame() seq %d returned an unexpected error: %v", seq, err)
+		}
+	}
+
+	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+	h.analyzer.calls = 0
+
+	got, err := h.sendFrame(t, s.ID, 5, s.Nonce, held)
+	if err != nil {
+		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+	}
+	if !got.Advanced {
+		t.Errorf("a blink held through identical frames did not advance: %+v", got)
+	}
+}
+
+// The static-replay defence must still fire. It is the streak that separates a
+// photograph from a person holding a pose, not any single duplicate.
+func TestALongStillStreakStillFailsEvenWhileSatisfying(t *testing.T) {
+	h := newHarness(t, func(d *Deps) { d.Guard.MaxDuplicateStreak = 4 })
+
+	s, err := h.svc.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() returned an unexpected error: %v", err)
+	}
+
+	stored, _ := h.repo.Get(context.Background(), s.ID)
+	stored.Challenges = []ChallengeKind{ChallengeNod}
+	stored.Current = 0
+	_ = h.repo.Update(context.Background(), stored)
+
+	// A frame that never satisfies the nod, repeated forever.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.40, LivenessScore: 0.95}}
+
+	var lastErr error
+	for seq := int64(1); seq <= 10; seq++ {
+		_, lastErr = h.sendFrame(t, s.ID, seq, s.Nonce, 0xABCD_ABCD_ABCD_ABCD)
+		if lastErr != nil {
+			break
+		}
+	}
+
+	if lastErr == nil {
+		t.Fatal("a motionless scene survived ten identical frames")
+	}
+
+	final, _ := h.repo.Get(context.Background(), s.ID)
+	if final.State != StateFailed {
+		t.Errorf("state = %s, want %s", final.State, StateFailed)
+	}
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 

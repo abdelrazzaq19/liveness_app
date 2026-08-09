@@ -39,7 +39,11 @@ const FRAME_INTERVAL_MS = 160;
 // Each challenge gets a moment before frames start counting. The turn and nod
 // challenges take their baseline from the first frame they see, so a subject
 // who has already started moving would be measured against their own turn.
-const SETTLE_MS = 700;
+//
+// Short, because the budget is short: at a five-second challenge this is
+// already a twelfth of it, and people take longer than this to read the
+// instruction anyway.
+const SETTLE_MS = 400;
 
 // The countdown redraws far more often than frames arrive, so the number moves
 // smoothly instead of stepping six times a second.

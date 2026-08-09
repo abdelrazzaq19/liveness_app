@@ -264,7 +264,7 @@ func load(getenv func(string) string) (*Config, error) {
 		},
 		Liveness: Liveness{
 			SessionTTL:        l.duration("LV_LIVENESS_SESSION_TTL", 90*time.Second, 10*time.Second, 10*time.Minute),
-			ChallengeTimeout:  l.duration("LV_LIVENESS_CHALLENGE_TIMEOUT", 10*time.Second, 3*time.Second, 5*time.Minute),
+			ChallengeTimeout:  l.duration("LV_LIVENESS_CHALLENGE_TIMEOUT", 5*time.Second, 3*time.Second, 5*time.Minute),
 			ChallengeCount:    l.intRange("LV_LIVENESS_CHALLENGE_COUNT", 3, 1, 5),
 			MinDetectionScore: l.float("LV_LIVENESS_MIN_DETECTION_SCORE", 0.60, 0, 1),
 			MinScore:          l.float("LV_LIVENESS_MIN_SCORE", 0.80, 0, 1),
