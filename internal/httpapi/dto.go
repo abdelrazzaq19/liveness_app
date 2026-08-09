@@ -3,6 +3,7 @@ package httpapi
 import (
 	"time"
 
+	"github.com/ziad/liveness-verifier/internal/enrollment"
 	"github.com/ziad/liveness-verifier/internal/liveness"
 )
 
@@ -104,6 +105,16 @@ type completeResponse struct {
 	SessionID string `json:"session_id"`
 	State     string `json:"state"`
 	Passed    bool   `json:"passed"`
+
+	// Token is the single-use liveness token, present only when the session
+	// passed. It is the only time it is ever sent: what is stored server side is
+	// its HMAC, so it cannot be handed out again.
+	//
+	// Returned to whoever completed the session, which on the intended
+	// deployment is the integrator backend that opened it. A demo page running
+	// without a backend receives it in the browser, which is one more reason
+	// anonymous sessions are not a production setting.
+	Token string `json:"token,omitempty"`
 }
 
 // sessionStatusResponse describes a session without exposing anything
@@ -138,4 +149,77 @@ func challengeNames(cs []liveness.ChallengeKind) []string {
 		out[i] = string(c)
 	}
 	return out
+}
+
+// ------------------------------------------------------------------ enrollment
+
+// enrollRequest registers one capture against a subject.
+type enrollRequest struct {
+	// Token is the single-use liveness token, issued when a session passed.
+	Token string `json:"token"`
+
+	// SubjectID is who the face belongs to, in the caller's own namespace.
+	SubjectID string `json:"subject_id"`
+
+	// Image is base64, with or without a data URL prefix.
+	Image string `json:"image"`
+}
+
+type enrollResponse struct {
+	FaceID    string `json:"face_id"`
+	SubjectID string `json:"subject_id"`
+
+	// SessionID is the liveness session that authorised the enrollment, echoed
+	// so the caller can tie their own records to the verification.
+	SessionID string `json:"session_id"`
+}
+
+type searchRequest struct {
+	Image string `json:"image"`
+}
+
+// searchResponse reports who the face belongs to.
+//
+// It carries similarity scores, which the liveness responses deliberately do
+// not. The difference is what the number would buy an attacker: a liveness
+// score tells them how close they came to defeating a defence, whereas a
+// gallery similarity is the answer the caller asked for, and an operator
+// tuning a threshold cannot do it blind.
+type searchResponse struct {
+	Matched bool `json:"matched"`
+
+	Best       *matchDTO  `json:"best,omitempty"`
+	Candidates []matchDTO `json:"candidates,omitempty"`
+}
+
+type matchDTO struct {
+	FaceID    string  `json:"face_id"`
+	SubjectID string  `json:"subject_id"`
+	Score     float64 `json:"score"`
+}
+
+func newSearchResponse(r enrollment.SearchResult) searchResponse {
+	out := searchResponse{Matched: r.Matched}
+
+	for _, c := range r.Candidates {
+		out.Candidates = append(out.Candidates, matchDTO{
+			FaceID: c.FaceID.String(), SubjectID: c.SubjectID, Score: c.Score,
+		})
+	}
+	if r.Matched {
+		out.Best = &matchDTO{
+			FaceID: r.Best.FaceID.String(), SubjectID: r.Best.SubjectID, Score: r.Best.Score,
+		}
+	}
+	return out
+}
+
+// deleteSubjectRequest carries the subject in the body rather than the path.
+// See facesHandler.deleteSubject for why.
+type deleteSubjectRequest struct {
+	SubjectID string `json:"subject_id"`
+}
+
+type deleteSubjectResponse struct {
+	FacesRemoved int `json:"faces_removed"`
 }

@@ -26,8 +26,17 @@ func testConfig() *config.Config {
 			// High enough that a test sending many requests from one address
 			// is not measuring the rate limiter by accident.
 			RateLimitPerMin: 100_000,
+
+			// Must be set, and this is the second time a zero here has cost an
+			// afternoon. The limits fail closed: zero bytes and zero pixels
+			// reject every image, so a test that forgets them sees "the frame
+			// could not be read" and goes looking for a decoder bug. Failing
+			// closed is right — the real loader always supplies a value — but a
+			// hand-built config has to supply one too.
+			MaxFrameBytes: 2 << 20,
 		},
-		Log: config.Log{Level: slog.LevelDebug, Format: "json"},
+		Imaging: config.Imaging{MaxDecodedPixels: 16_000_000},
+		Log:     config.Log{Level: slog.LevelDebug, Format: "json"},
 	}
 }
 

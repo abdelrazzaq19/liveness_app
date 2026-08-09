@@ -36,11 +36,24 @@ type LivenessService interface {
 // browser history, and referrer headers, and this one is a credential.
 const headerSessionNonce = "X-Session-Nonce"
 
+// TokenIssuer mints the single-use token a passed session earns.
+//
+// An interface rather than the concrete service so this package does not have
+// to construct one, and so a nil value simply means no tokens are issued —
+// which is what a deployment with no enrollment path wants.
+type TokenIssuer interface {
+	Issue(ctx context.Context, sessionID string, now time.Time) (string, error)
+}
+
 // livenessHandler serves the session endpoints.
 type livenessHandler struct {
 	svc    LivenessService
 	log    *slog.Logger
 	limits imaging.Limits
+
+	// tokens is optional. Nil leaves the verdict without a token, which is
+	// correct for a deployment that only verifies and never enrols.
+	tokens TokenIssuer
 
 	// maxBodyBytes caps the request body.
 	//
@@ -85,11 +98,30 @@ func (h *livenessHandler) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, h.log, http.StatusOK, completeResponse{
+	resp := completeResponse{
 		SessionID: verdict.SessionID.String(),
 		State:     string(verdict.State),
 		Passed:    verdict.Passed,
-	})
+	}
+
+	// The token is minted here, on the one path that knows a session passed.
+	//
+	// A failure to mint does not fail the verification: the subject did what
+	// was asked and the verdict stands. What they lose is the ability to enrol
+	// on the strength of it, which is a smaller harm than telling somebody who
+	// passed that they did not.
+	if verdict.Passed && h.tokens != nil {
+		token, err := h.tokens.Issue(r.Context(), verdict.SessionID.String(), time.Now())
+		if err != nil {
+			h.log.ErrorContext(r.Context(), "session passed but no liveness token could be issued",
+				slog.String("session_id", verdict.SessionID.String()),
+				slog.String("error", err.Error()))
+		} else {
+			resp.Token = token
+		}
+	}
+
+	writeJSON(w, h.log, http.StatusOK, resp)
 }
 
 func (h *livenessHandler) submitFrame(w http.ResponseWriter, r *http.Request) {

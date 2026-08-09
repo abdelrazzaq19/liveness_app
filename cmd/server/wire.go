@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"log/slog"
 	"path/filepath"
 
@@ -12,8 +15,10 @@ import (
 	"github.com/ziad/liveness-verifier/internal/biometric/onnx"
 	"github.com/ziad/liveness-verifier/internal/biometric/stub"
 	"github.com/ziad/liveness-verifier/internal/config"
+	"github.com/ziad/liveness-verifier/internal/enrollment"
 	"github.com/ziad/liveness-verifier/internal/imaging"
 	"github.com/ziad/liveness-verifier/internal/liveness"
+	"github.com/ziad/liveness-verifier/internal/storage/objectstore"
 	"github.com/ziad/liveness-verifier/internal/storage/postgres"
 )
 
@@ -22,7 +27,9 @@ type app struct {
 	db      *postgres.DB
 	runtime *onnx.Runtime
 
-	Liveness *liveness.Service
+	Liveness   *liveness.Service
+	Enrollment *enrollment.Service
+	Tokens     *enrollment.TokenService
 }
 
 // Close releases every resource, reporting the first failure but attempting all
@@ -110,7 +117,150 @@ func build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*app, err
 	}
 
 	a.Liveness = svc
+
+	if err := buildEnrollment(ctx, a, cfg, log, sessions, analyzer); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
 	return a, nil
+}
+
+// buildEnrollment wires the gallery, the token service, and the object store.
+//
+// Separate from build so the enrollment path can be read as one piece, and so
+// the failure of any part of it names enrollment rather than surfacing as an
+// anonymous error halfway down a long function.
+func buildEnrollment(
+	ctx context.Context,
+	a *app,
+	cfg *config.Config,
+	log *slog.Logger,
+	sessions *postgres.SessionRepo,
+	analyzer biometric.Analyzer,
+) error {
+	faces, err := postgres.NewFaceRepo(a.db, cfg.Enrollment.HNSWEfSearch)
+	if err != nil {
+		return err
+	}
+
+	tokenStore, err := postgres.NewTokenStore(a.db)
+	if err != nil {
+		return err
+	}
+
+	tokens, err := enrollment.NewTokenService(enrollment.TokenDeps{
+		Store:   tokenStore,
+		Secret:  cfg.Token.Secret.Reveal(),
+		TTL:     cfg.Token.TTL,
+		Entropy: rand.Reader,
+	})
+	if err != nil {
+		return err
+	}
+	a.Tokens = tokens
+
+	// Only connected when retention is on. A deployment that keeps no images
+	// should not need a reachable object store to boot, and requiring one would
+	// push operators towards turning retention on to make the error go away.
+	var artifacts enrollment.ArtifactStore
+	if cfg.Enrollment.StoreArtifacts {
+		store, err := objectstore.Open(ctx, cfg.ObjectStore)
+		if err != nil {
+			return err
+		}
+		artifacts = store
+
+		log.Warn("enrollment artifacts are being retained: face crops will be written to object storage",
+			slog.String("bucket", cfg.ObjectStore.Bucket),
+			slog.String("hint", "set LV_ENROLL_STORE_ARTIFACTS=false unless you need the images"))
+	}
+
+	svc, err := enrollment.NewService(enrollment.Deps{
+		Faces:          faces,
+		Tokens:         tokens,
+		Sessions:       sessionReferences{repo: sessions},
+		Analyzer:       analyzer,
+		Artifacts:      artifacts,
+		EncodeArtifact: encodeAlignedCrop,
+		IDs:            randomFaceIDs{},
+		Clock:          liveness.SystemClock{},
+		Logger:         log,
+		Config: enrollment.Config{
+			MatchCosineMin:    cfg.Enrollment.MatchCosineMin,
+			IdentityCosineMin: cfg.Liveness.IdentityCosineMin,
+			SearchTopK:        cfg.Enrollment.SearchTopK,
+			StoreArtifacts:    cfg.Enrollment.StoreArtifacts,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	a.Enrollment = svc
+	return nil
+}
+
+// sessionReferences adapts the liveness session repository to the little the
+// enrollment path needs from it.
+//
+// The adapter lives here rather than in either package, because it is the only
+// place allowed to know both exist. internal/liveness must not learn that
+// enrollment is a thing.
+type sessionReferences struct {
+	repo *postgres.SessionRepo
+}
+
+func (s sessionReferences) ReferenceEmbedding(ctx context.Context, id string) (biometric.Embedding, error) {
+	session, err := s.repo.Get(ctx, liveness.SessionID(id))
+	if err != nil {
+		return nil, err
+	}
+
+	// Only a session that actually passed may vouch for a face. A token is only
+	// minted on a pass, so reaching here with anything else means the session
+	// changed underneath the token — and refusing is the safe reading.
+	if session.State != liveness.StatePassed {
+		return nil, fmt.Errorf("session %s is %s, not %s", id, session.State, liveness.StatePassed)
+	}
+	return session.ReferenceEmbedding, nil
+}
+
+// encodeAlignedCrop is the artifact encoder: the 112x112 crop the embedding was
+// computed from, as a JPEG.
+//
+// The aligned crop rather than the whole frame. It is what the model actually
+// saw, it is kilobytes rather than megabytes, and it excludes whatever else
+// happened to be in the room.
+func encodeAlignedCrop(img image.Image, kps biometric.Keypoints) ([]byte, string, error) {
+	crop, err := imaging.AlignFace(img, kps, alignedCropSize)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, crop, &jpeg.Options{Quality: 92}); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), "image/jpeg", nil
+}
+
+// alignedCropSize matches the embedder's input, since that is the image whose
+// contents the stored vector actually describes.
+const alignedCropSize = 112
+
+// randomFaceIDs generates gallery identifiers.
+//
+// Random rather than sequential for the same reason session ids are: a
+// predictable id is one somebody can guess, and here it also appears in the
+// object store key.
+type randomFaceIDs struct{}
+
+func (randomFaceIDs) NewID() (enrollment.FaceID, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate face id: %w", err)
+	}
+	return enrollment.FaceID(hex.EncodeToString(b[:])), nil
 }
 
 // buildAnalyzer returns either the real pipeline or the deterministic stub.

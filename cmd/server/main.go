@@ -80,9 +80,11 @@ func run() error {
 	}()
 
 	handler, err := httpapi.NewRouter(httpapi.Deps{
-		Config:   cfg,
-		Logger:   log,
-		Liveness: application.Liveness,
+		Config:     cfg,
+		Logger:     log,
+		Liveness:   application.Liveness,
+		Enrollment: application.Enrollment,
+		Tokens:     application.Tokens,
 	})
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)

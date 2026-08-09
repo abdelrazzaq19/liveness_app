@@ -28,6 +28,14 @@ type Deps struct {
 	// unmounted, which is what the health-only configuration in the earliest
 	// tests relies on.
 	Liveness LivenessService
+
+	// Enrollment serves the gallery endpoints. Nil leaves them unmounted, which
+	// is what a deployment that only verifies and never enrols wants.
+	Enrollment EnrollmentService
+
+	// Tokens mints the single-use token a passed session earns. Nil means no
+	// token is issued, and enrollment is then unreachable by design.
+	Tokens TokenIssuer
 }
 
 func (d Deps) validate() error {
@@ -86,6 +94,20 @@ func NewRouter(d Deps) (http.Handler, error) {
 			// Base64 inflates by a third; the rest is room for the JSON around
 			// it.
 			maxBodyBytes: d.Config.Server.MaxFrameBytes*4/3 + 4096,
+			tokens:       d.Tokens,
+		}
+	}
+
+	var f *facesHandler
+	if d.Enrollment != nil {
+		f = &facesHandler{
+			svc: d.Enrollment,
+			log: log,
+			limits: imaging.Limits{
+				MaxBytes:  d.Config.Server.MaxFrameBytes,
+				MaxPixels: d.Config.Imaging.MaxDecodedPixels,
+			},
+			maxBodyBytes: d.Config.Server.MaxFrameBytes*4/3 + 4096,
 		}
 	}
 
@@ -132,7 +154,18 @@ func NewRouter(d Deps) (http.Handler, error) {
 		r.Group(func(r chi.Router) {
 			r.Use(APIKeyAuth(d.Config.Server.APIKeys, log))
 
-			// Face endpoints are mounted here by later tasks.
+			// The gallery is operator territory throughout. Even enrolling,
+			// which a subject's liveness token authorises, is a call an
+			// integrator makes on their behalf: the token proves the capture was
+			// live, the key proves who is allowed to write to the gallery, and
+			// neither substitutes for the other.
+			if f != nil {
+				r.Post("/faces", f.enroll)
+				r.Post("/faces/search", f.search)
+
+				// No subject in the path. See facesHandler.deleteSubject.
+				r.Delete("/faces", f.deleteSubject)
+			}
 
 			// A chi sub-router builds its middleware chain lazily, and only
 			// once at least one route is registered on it. Without this
