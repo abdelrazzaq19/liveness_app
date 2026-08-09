@@ -39,19 +39,38 @@ docker compose version
 
 ### Editor
 
-Buka repo ini **di dalam container**, lewat Dev Containers: di VS Code jalankan
-*Dev Containers: Reopen in Container*. Konfigurasinya sudah ada di
+Binding ONNX Runtime dijaga build constraint `cgo`. Tanpa kompiler C,
+`CGO_ENABLED` jatuh ke 0, seluruh file binding dikecualikan, dan editor
+menandai **setiap** import di `internal/biometric/onnx/` sebagai kesalahan —
+termasuk `math` dari stdlib, karena paket yang gagal memuat dependensinya tidak
+bisa di-type-check sama sekali. Kodenya sendiri tidak salah.
+
+Dua cara memperbaikinya. Pilih satu.
+
+**Bekerja di Windows.** Pasang toolchain-nya sekali:
+
+```bash
+winget install --id BrechtSanders.WinLibs.POSIX.UCRT
+```
+
+lalu `go env -w CGO_ENABLED=1`, lalu **restart language server** (Ctrl+Shift+P
+→ *Go: Restart Language Server*) — gopls membaca `go env` sekali saat mulai.
+Konsekuensinya ada kompiler kedua yang versinya bisa berbeda dari milik
+container; build resmi tetap lewat Docker.
+
+**Atau bekerja di dalam container.** Ctrl+Shift+P → *Dev Containers: Reopen in
+Container*. Tidak ada yang dipasang di host, dan lingkungannya sama persis
+dengan gerbang kualitas. Konfigurasinya di
 [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json).
 
-Ini bukan soal selera. Binding ONNX Runtime dijaga build constraint `cgo`, dan
-di Windows tanpa kompiler C `CGO_ENABLED` jatuh ke 0 — seluruh file binding
-dikecualikan, lalu editor menandai setiap acuan `ort.*` di kesebelas file
-`internal/biometric/onnx/` sebagai kesalahan yang sebenarnya tidak ada. Di
-dalam container semuanya build, vet, dan lint dengan bersih.
+Apa pun pilihannya, sebutkan tag `models` dan `integration` ke gopls, kalau
+tidak test di bawahnya tidak terlihat dan tampak seperti kode mati sampai
+gerbang kualitas menemukannya. Devcontainer sudah mengaturnya; untuk host,
+`.vscode/settings.json` (tidak ikut git):
 
-Kalau lebih suka tetap di host: pasang mingw-w64, lalu `go env -w
-CGO_ENABLED=1`. Itu juga berhasil, dengan konsekuensi ada satu toolchain lagi
-yang harus dijaga cocok dengan milik container.
+```json
+{ "gopls": { "build.buildFlags": ["-tags=models,integration"] } }
+```
 
 ## Menjalankan
 
