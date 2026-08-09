@@ -50,9 +50,19 @@ type poseCorrespondence struct {
 // slides the point a long way along the surface — and a wrong 3D
 // correspondence tilts the whole estimate without ever failing.
 //
-// The seven here are corners and extremes: the points that stay identifiable
-// across expressions, spanning enough depth to constrain pitch as well as yaw.
+// The nose tip is what makes the set solvable, and leaving it out was a real
+// bug rather than a simplification. Without it six of the seven remaining
+// points sit within 10 mm of one depth: a nearly planar set, and a weak
+// perspective solve from nearly planar points is ill conditioned in the
+// textbook way. On a real session that showed up as a pitch of 40 to 72 degrees
+// for a subject sitting square to a laptop, and a yaw that never passed 22 even
+// when they plainly turned their head.
+//
+// The tip is the only landmark on a face that protrudes. It carries the depth
+// the other seven do not have, which is why the model this one derives from
+// puts it at the origin with everything else behind it.
 var poseModel = []poseCorrespondence{
+	{NoseFirst + NoseTip, [3]float64{0, 0, 0}},
 	{LeftEyeFirst + eyeCornerLeft, [3]float64{-225, -170, 135}},
 	{LeftEyeFirst + eyeCornerRight, [3]float64{-75, -170, 125}},
 	{RightEyeFirst + eyeCornerLeft, [3]float64{75, -170, 125}},

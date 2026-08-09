@@ -2,6 +2,7 @@ package biometric
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -276,5 +277,169 @@ func TestRotationMatrixAndEulerRoundTrip(t *testing.T) {
 	for _, want := range poses {
 		got := eulerFromRotation(rotationMatrix(want))
 		assertPose(t, got, want, 1e-9)
+	}
+}
+
+// The correspondence set must not be nearly planar.
+//
+// This is the invariant that was actually broken, and it broke silently: the
+// solve still returned an answer, it was just wrong. Six of the seven points
+// then sat within 10 mm of one depth, and a weak perspective solve from a
+// nearly planar set is ill conditioned — pitch read 40 to 72 degrees for a
+// subject square to a laptop, and yaw never passed 22 when they turned.
+//
+// Checking the spread rather than the presence of any one landmark, because
+// what matters is the geometry, not which points happen to supply it.
+func TestPoseModelIsNotNearlyPlanar(t *testing.T) {
+	if len(poseModel) < 4 {
+		t.Fatalf("the pose model has %d points; a solve needs at least 4", len(poseModel))
+	}
+
+	minZ, maxZ := math.Inf(1), math.Inf(-1)
+	minX, maxX := math.Inf(1), math.Inf(-1)
+	minY, maxY := math.Inf(1), math.Inf(-1)
+	for _, c := range poseModel {
+		minX, maxX = math.Min(minX, c.model[0]), math.Max(maxX, c.model[0])
+		minY, maxY = math.Min(minY, c.model[1]), math.Max(maxY, c.model[1])
+		minZ, maxZ = math.Min(minZ, c.model[2]), math.Max(maxZ, c.model[2])
+	}
+
+	depth := maxZ - minZ
+	lateral := math.Max(maxX-minX, maxY-minY)
+	t.Logf("model extent: x %.0f  y %.0f  depth %.0f  ratio %.3f",
+		maxX-minX, maxY-minY, depth, depth/lateral)
+
+	// A tenth of the lateral extent is already generous; the classic model this
+	// derives from sits at 0.27.
+	if ratio := depth / lateral; ratio < 0.15 {
+		t.Errorf("depth is %.0f against a lateral extent of %.0f (ratio %.3f): "+
+			"the points are nearly planar and the solve is ill conditioned", depth, lateral, ratio)
+	}
+
+	// And the depth must not come from a single outlier: drop any one point and
+	// the set must still span.
+	for i := range poseModel {
+		lo, hi := math.Inf(1), math.Inf(-1)
+		for j, c := range poseModel {
+			if i == j {
+				continue
+			}
+			lo, hi = math.Min(lo, c.model[2]), math.Max(hi, c.model[2])
+		}
+		if hi-lo < depth*0.4 {
+			t.Errorf("dropping point %d collapses the depth from %.0f to %.0f; "+
+				"the conditioning rests on one landmark", i, depth, hi-lo)
+		}
+	}
+}
+
+// A real rotation must survive the round trip through the projection.
+//
+// The previous model passed every algebraic test in this file — the Euler
+// decomposition and its inverse agreed perfectly — while still producing
+// nonsense on real faces, because those tests never projected anything. This
+// one does: it takes the model points, rotates them, projects them the way a
+// camera would, and asks whether the solver recovers the angle it started from.
+func TestPoseSurvivesProjectionRoundTrip(t *testing.T) {
+	for _, want := range []Pose{
+		{Yaw: 0, Pitch: 0, Roll: 0},
+		{Yaw: 20, Pitch: 0, Roll: 0},
+		{Yaw: -25, Pitch: 0, Roll: 0},
+		{Yaw: 0, Pitch: 15, Roll: 0},
+		{Yaw: 0, Pitch: -12, Roll: 0},
+		{Yaw: 18, Pitch: -10, Roll: 6},
+	} {
+		t.Run(fmt.Sprintf("yaw %.0f pitch %.0f roll %.0f", want.Yaw, want.Pitch, want.Roll), func(t *testing.T) {
+			var pts Landmarks106
+			r := rotationMatrix(want)
+
+			// Scaled orthographic projection, which is the model the solver
+			// assumes: rotate, drop z, scale, and place in the frame.
+			const scale = 0.5
+			for _, c := range poseModel {
+				x := r.At(0, 0)*c.model[0] + r.At(0, 1)*c.model[1] + r.At(0, 2)*c.model[2]
+				y := r.At(1, 0)*c.model[0] + r.At(1, 1)*c.model[1] + r.At(1, 2)*c.model[2]
+				pts[c.landmark] = Point{X: 320 + scale*x, Y: 400 + scale*y}
+			}
+
+			got, err := pts.EstimatePose()
+			if err != nil {
+				t.Fatalf("EstimatePose() returned an unexpected error: %v", err)
+			}
+
+			for _, axis := range []struct {
+				name       string
+				got, want_ float64
+			}{
+				{"yaw", got.Yaw, want.Yaw},
+				{"pitch", got.Pitch, want.Pitch},
+				{"roll", got.Roll, want.Roll},
+			} {
+				if math.Abs(axis.got-axis.want_) > 1.0 {
+					t.Errorf("%s = %.2f, want %.2f", axis.name, axis.got, axis.want_)
+				}
+			}
+		})
+	}
+}
+
+// Conditioning, which is what actually broke.
+//
+// TestPoseSurvivesProjectionRoundTrip passes even with a nearly planar model,
+// because a noise-free projection solves exactly however badly conditioned it
+// is. That is precisely why the missing nose tip survived every algebraic test
+// in this file while producing 40 to 72 degrees of pitch on real faces.
+//
+// Real landmarks are not noise-free. A regression that places each point within
+// a pixel or two of the truth is a good one, and the estimate has to stay
+// usable under that.
+func TestPoseIsStableUnderLandmarkNoise(t *testing.T) {
+	// Deterministic jitter: a fixed pattern rather than a random one, so a
+	// failure is reproducible and not a flake somebody reruns until it passes.
+	jitter := []Point{
+		{X: 1.5, Y: -1.0},
+		{X: -1.2, Y: 1.4},
+		{X: 0.8, Y: 1.1},
+		{X: -1.6, Y: -0.7},
+		{X: 1.1, Y: 1.6},
+		{X: -0.9, Y: -1.3},
+		{X: 1.4, Y: 0.6},
+		{X: -1.3, Y: 1.2},
+	}
+
+	for _, want := range []Pose{
+		{Yaw: 0, Pitch: 0, Roll: 0},
+		{Yaw: 20, Pitch: -5, Roll: 0},
+		{Yaw: -20, Pitch: 5, Roll: 3},
+	} {
+		t.Run(fmt.Sprintf("yaw %.0f pitch %.0f", want.Yaw, want.Pitch), func(t *testing.T) {
+			var pts Landmarks106
+			r := rotationMatrix(want)
+
+			const scale = 0.5
+			for i, c := range poseModel {
+				x := r.At(0, 0)*c.model[0] + r.At(0, 1)*c.model[1] + r.At(0, 2)*c.model[2]
+				y := r.At(1, 0)*c.model[0] + r.At(1, 1)*c.model[1] + r.At(1, 2)*c.model[2]
+
+				j := jitter[i%len(jitter)]
+				pts[c.landmark] = Point{X: 320 + scale*x + j.X, Y: 400 + scale*y + j.Y}
+			}
+
+			got, err := pts.EstimatePose()
+			if err != nil {
+				t.Fatalf("EstimatePose() returned an unexpected error: %v", err)
+			}
+			t.Logf("want %+v  got yaw %.1f pitch %.1f roll %.1f", want, got.Yaw, got.Pitch, got.Roll)
+
+			// A couple of pixels of landmark noise must not move the answer by
+			// more than a few degrees. The broken model moved it by tens.
+			const tolerance = 8.0
+			if math.Abs(got.Yaw-want.Yaw) > tolerance {
+				t.Errorf("yaw = %.1f, want %.1f within %.0f degrees", got.Yaw, want.Yaw, tolerance)
+			}
+			if math.Abs(got.Pitch-want.Pitch) > tolerance {
+				t.Errorf("pitch = %.1f, want %.1f within %.0f degrees", got.Pitch, want.Pitch, tolerance)
+			}
+		})
 	}
 }

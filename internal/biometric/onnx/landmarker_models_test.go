@@ -202,3 +202,112 @@ func TestNewLandmarkerRejectsWrongGraph(t *testing.T) {
 		t.Error("NewLandmarker2d106() accepted the detector graph, want an error")
 	}
 }
+
+// TestNoseBlockGeometry finds the nose tip by asking the model rather than by
+// trusting a remembered index.
+//
+// The pose solver needs it. Without it the seven correspondences it uses sit
+// within 10 mm of one depth — a nearly planar set, which makes a weak
+// perspective solve ill-conditioned: on a real session pitch read 40 to 72
+// degrees for a subject facing a laptop, and yaw never exceeded 22 even when
+// the subject plainly turned. The nose is the one landmark that carries real
+// depth, so which index it is decides whether the estimate is conditioned at
+// all.
+//
+// On an input with no face the regression collapses to its mean shape, and that
+// canonical face is exactly what is wanted here.
+func TestNoseBlockGeometry(t *testing.T) {
+	l := newLandmarker(t)
+
+	box := biometric.BBox{MinX: 200, MinY: 200, MaxX: 400, MaxY: 460}
+	pts, err := l.Landmarks(context.Background(), syntheticScene(640, 800), box)
+	if err != nil {
+		t.Fatalf("Landmarks() returned an unexpected error: %v", err)
+	}
+
+	eyes := biometric.Point{
+		X: (pts.EyeCenter(biometric.LeftEye).X + pts.EyeCenter(biometric.RightEye).X) / 2,
+		Y: (pts.EyeCenter(biometric.LeftEye).Y + pts.EyeCenter(biometric.RightEye).Y) / 2,
+	}
+	mouth := pts.MouthCenter()
+	span := mouth.Y - eyes.Y
+
+	t.Logf("eye midpoint %+v   mouth %+v   eye-to-mouth %.1f px", eyes, mouth, span)
+	t.Logf("index   x        y      dx from centre   depth-fraction eyes->mouth")
+
+	// The tip is the nose point nearest the vertical midline and lowest down
+	// the bridge before the base flares out.
+	best, bestScore := -1, math.Inf(1)
+	for i := biometric.NoseFirst; i <= biometric.NoseLast; i++ {
+		p := pts[i]
+		dx := math.Abs(p.X - eyes.X)
+		frac := (p.Y - eyes.Y) / span
+		t.Logf("%5d %7.1f %7.1f %12.1f %18.2f", i, p.X, p.Y, dx, frac)
+
+		// The tip is the midline point that continues the bridge downwards. Its
+		// neighbours below are the nostril base, which flanks the centre rather
+		// than sitting on it, and the wings are wider still.
+		if frac > 0.45 && dx < bestScore {
+			best, bestScore = i, dx
+		}
+	}
+
+	t.Logf("nose tip: index %d (%.1f px off the midline)", best, bestScore)
+
+	if best != biometric.NoseFirst+biometric.NoseTip {
+		t.Errorf("the mean face puts the nose tip at index %d, but NoseTip names %d",
+			best, biometric.NoseFirst+biometric.NoseTip)
+	}
+}
+
+// TestContourBlockGeometry confirms that index 0 really is the chin.
+//
+// It was written expecting the opposite. The block is documented as running ear
+// to chin to ear, which reads as though index 0 must be beside the jaw — and if
+// so, the pose model telling the solver it sits at the chin.s 3D position would
+// be a gross mis-correspondence.
+//
+// The mean face says otherwise: index 0 is the lowest point of the contour and
+// sits near the midline. The block starts at the chin and runs outwards. The
+// correspondence was right, and this test now guards it against being
+// "corrected" by the next person to read that comment.
+func TestContourBlockGeometry(t *testing.T) {
+	l := newLandmarker(t)
+
+	box := biometric.BBox{MinX: 200, MinY: 200, MaxX: 400, MaxY: 460}
+	pts, err := l.Landmarks(context.Background(), syntheticScene(640, 800), box)
+	if err != nil {
+		t.Fatalf("Landmarks() returned an unexpected error: %v", err)
+	}
+
+	centre := (pts.EyeCenter(biometric.LeftEye).X + pts.EyeCenter(biometric.RightEye).X) / 2
+
+	// The chin is the lowest point of the contour; on a frontal face it is also
+	// the one nearest the midline.
+	lowest, lowestY := -1, math.Inf(-1)
+	for i := biometric.ContourFirst; i <= biometric.ContourLast; i++ {
+		if pts[i].Y > lowestY {
+			lowest, lowestY = i, pts[i].Y
+		}
+	}
+
+	first := pts[biometric.ContourFirst]
+	chin := pts[lowest]
+
+	t.Logf("midline x           %.1f", centre)
+	t.Logf("ContourFirst (%2d)   x %.1f  y %.1f   %.1f px off the midline",
+		biometric.ContourFirst, first.X, first.Y, math.Abs(first.X-centre))
+	t.Logf("lowest point (%2d)   x %.1f  y %.1f   %.1f px off the midline",
+		lowest, chin.X, chin.Y, math.Abs(chin.X-centre))
+	t.Logf("ContourFirst sits %.1f px ABOVE the lowest point", chin.Y-first.Y)
+
+	if lowest != biometric.ContourFirst {
+		t.Errorf("the lowest contour point is index %d, not ContourFirst (%d); "+
+			"the pose model maps ContourFirst to the chin", lowest, biometric.ContourFirst)
+	}
+
+	// Near the midline, or it is a jaw point rather than the chin.
+	if off := math.Abs(chin.X - centre); off > math.Abs(pts[biometric.ContourLast].X-centre)/2 {
+		t.Errorf("the chin sits %.1f px off the midline; that is a jaw point, not a chin", off)
+	}
+}

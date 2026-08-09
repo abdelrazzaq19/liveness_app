@@ -40,6 +40,19 @@ const (
 	NoseFirst = 72
 	NoseLast  = 86
 
+	// NoseTip is the offset of the tip within the nose block.
+	//
+	// Read off the model's own mean shape rather than remembered: points 72, 73
+	// and 74 walk down the midline, and this one continues that line below them
+	// at 0.0 px off centre. The two points lower than it flank the midline
+	// instead of sitting on it, because they are the nostril base rather than
+	// the tip. Asserted in landmarker_models_test.go.
+	//
+	// It matters more than its size suggests. It is the only landmark on the
+	// face that protrudes, so it carries nearly all the depth the pose solver
+	// has to work with.
+	NoseTip = 14
+
 	RightEyeFirst  = 87
 	RightEyeLast   = 96
 	RightBrowFirst = 97
