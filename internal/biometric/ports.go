@@ -3,6 +3,7 @@ package biometric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 )
 
@@ -19,6 +20,15 @@ var (
 	// ErrLowQuality means a face was found but the frame is not good enough to
 	// analyse: too blurry, too dark, or the face is too small.
 	ErrLowQuality = errors.New("biometric: frame quality too low")
+
+	// ErrFaceTooSmall means the face was found and is simply too far away.
+	//
+	// Separate from the rest of ErrLowQuality because it is the one a subject
+	// can act on immediately, and because the advice differs: "hold steady in
+	// good light" is useless, and actively misleading, when the light is fine
+	// and the face is merely small. It wraps ErrLowQuality, so anything
+	// branching on that keeps working.
+	ErrFaceTooSmall = fmt.Errorf("%w: face is too small", ErrLowQuality)
 )
 
 // Detector finds the most prominent face in an image.

@@ -308,6 +308,22 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 	})
 
 	if analyzeErr != nil {
+		// Logged here as well as after a successful analysis, because this is
+		// the path a frame takes when the pipeline never produced a
+		// measurement — and a frame that stops here leaves no trace in the
+		// metrics log at all. Instrumenting only the happy path is how a
+		// session where every single frame was rejected outright looked
+		// identical to one where the thresholds were merely too tight.
+		//
+		// The error text carries the detail: which gate, and by how much.
+		s.deps.Logger.DebugContext(ctx, "frame rejected before measurement",
+			slog.String("session_id", session.ID.String()),
+			slog.Int64("seq", in.Seq),
+			slog.String("challenge", string(session.ActiveChallenge())),
+			slog.Bool("recoverable", recoverableAnalysis(analyzeErr)),
+			slog.String("error", analyzeErr.Error()),
+		)
+
 		if !recoverableAnalysis(analyzeErr) {
 			return FrameResult{State: session.State}, fmt.Errorf("liveness: analyse frame: %w", analyzeErr)
 		}
@@ -540,6 +556,14 @@ func analysisReason(err error) string {
 	switch {
 	case errors.Is(err, biometric.ErrNoFaceFound):
 		return "no face in view"
+
+	// Checked before the general quality case, which it is a kind of. A subject
+	// whose light is fine and whose face is merely small was being told to hold
+	// steady in good light — advice they could follow perfectly and still be
+	// refused by every frame.
+	case errors.Is(err, biometric.ErrFaceTooSmall):
+		return "move closer to the camera"
+
 	case errors.Is(err, biometric.ErrLowQuality):
 		return "hold steady and make sure your face is well lit"
 	default:

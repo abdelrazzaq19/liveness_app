@@ -144,8 +144,8 @@ func (p *Pipeline) Analyze(ctx context.Context, img image.Image, opts AnalyzeOpt
 	// because it needs the detection, but it still runs before the three
 	// expensive stages.
 	if p.MinFaceWidth > 0 && detection.Box.Width() < float64(p.MinFaceWidth) {
-		return face, fmt.Errorf("%w: face is %.0f px wide, need %d",
-			ErrLowQuality, detection.Box.Width(), p.MinFaceWidth)
+		return face, fmt.Errorf("%w: %.0f px wide, need %d",
+			ErrFaceTooSmall, detection.Box.Width(), p.MinFaceWidth)
 	}
 
 	landmarks, err := p.Landmarker.Landmarks(ctx, img, detection.Box)

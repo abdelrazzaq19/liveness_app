@@ -75,6 +75,7 @@ const state = {
   currentChallenge: null,
   settleUntil: 0,
   passTimer: null,
+  lastReason: '',
   done: new Set(),
 
   // The countdown is interpolated between server responses. Storing when the
@@ -212,13 +213,20 @@ function showPass(finished, next) {
 // subject still finishing the movement that ran out of time.
 function showRetry(kind, left) {
   const step = INSTRUCTIONS[kind];
+  const chances = left > 0 ? `Sisa ${left} kesempatan.` : 'Kesempatan terakhir.';
 
   els.pass.classList.add('bad');
   els.passMark.textContent = '↻';
   els.passTitle.textContent = 'Waktu habis — ulangi langkah ini';
-  els.passNext.textContent = left > 0
-    ? `${step ? step.text : 'Langkah ini'}. Sisa ${left} kesempatan.`
-    : `${step ? step.text : 'Langkah ini'}. Kesempatan terakhir.`;
+
+  // The last per-frame reason, when there was one, is what the subject
+  // actually needs. Without it this overlay says the step ran out of time and
+  // nothing about why — which is how a session where every frame was refused
+  // for being too far from the camera looked like a movement that simply was
+  // not big enough.
+  els.passNext.textContent = state.lastReason
+    ? `${state.lastReason}. ${chances}`
+    : `${step ? step.text : 'Langkah ini'}. ${chances}`;
   els.passAction.hidden = true;
   els.pass.hidden = false;
 
@@ -299,9 +307,19 @@ function captureFrame() {
   const video = els.video;
   if (!video.videoWidth) return null;
 
-  // Downscale: the detector letterboxes to 320 anyway, and sending a 1080p
-  // frame six times a second wastes bandwidth on pixels nothing reads.
-  const target = 480;
+  // Downscale, but not below what the server measures against.
+  //
+  // The old target of 480 was justified by "the detector letterboxes to 320
+  // anyway", which is true and beside the point: the server rejects any face
+  // narrower than the embedder's own 112 px input, measured in the pixels it
+  // was sent. A face at ordinary laptop distance came out 105-111 px wide at
+  // 480 — one to seven pixels short — so every frame of a session was refused
+  // before a single challenge was ever evaluated.
+  //
+  // 720 puts that same face near 160 px. The detector still letterboxes to
+  // 320; the extra pixels are read by the stages after it, which crop from the
+  // frame at full resolution.
+  const target = 720;
   const scale = Math.min(1, target / Math.max(video.videoWidth, video.videoHeight));
   const w = Math.round(video.videoWidth * scale);
   const h = Math.round(video.videoHeight * scale);
@@ -356,13 +374,17 @@ async function sendFrame() {
     if (res.retried) {
       showRetry(res.challenge, res.retries_left);
       setStatus('Waktu langkah ini habis. Mengulang langkah yang sama.', 'warn');
+      state.lastReason = '';
     } else if (res.advanced) {
       showPass(finished, res.challenge);
       setStatus('Bagus.', 'ok');
+      state.lastReason = '';
     } else if (res.reason) {
       setStatus(res.reason);
+      state.lastReason = res.reason;
     } else {
       setStatus('');
+      state.lastReason = '';
     }
   } catch (err) {
     // 410 is a deadline that ran out; 422 is a verification failure.
@@ -444,7 +466,10 @@ async function start() {
 
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      // 720p rather than 480p: at 640x480 a face at ordinary laptop distance
+      // is around 143 px wide before the send-side downscale, which leaves no
+      // margin over the server's 112 px floor once anything is resized.
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false,
     });
   } catch (err) {

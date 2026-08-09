@@ -994,6 +994,41 @@ func TestReadingTheStatusDoesNotEndARecoverableSession(t *testing.T) {
 	}
 }
 
+// A face that is merely too far away must not be told to fix the lighting.
+//
+// This cost a real session: every frame was refused for being 105-111 px wide
+// against a 112 px floor, while the subject was advised to hold steady in good
+// light — advice they could follow perfectly and still be refused by every
+// frame, with no hint that the camera distance was the problem.
+func TestTooSmallAFaceIsToldToMoveCloser(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"too small", fmt.Errorf("%w: 107 px wide, need 112", biometric.ErrFaceTooSmall), "move closer to the camera"},
+		{"blurry or dark", fmt.Errorf("%w: too blurry", biometric.ErrLowQuality), "hold steady and make sure your face is well lit"},
+		{"no face", biometric.ErrNoFaceFound, "no face in view"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := analysisReason(tt.err); got != tt.want {
+				t.Errorf("analysisReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// The specific error still satisfies the general one, so everything that
+	// treats low quality as recoverable keeps working.
+	if !errors.Is(biometric.ErrFaceTooSmall, biometric.ErrLowQuality) {
+		t.Error("ErrFaceTooSmall no longer wraps ErrLowQuality; recoverable-frame handling would change")
+	}
+	if !recoverableAnalysis(biometric.ErrFaceTooSmall) {
+		t.Error("a face that is too small must be recoverable, not a session failure")
+	}
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 
