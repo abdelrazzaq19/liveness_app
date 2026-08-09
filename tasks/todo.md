@@ -33,10 +33,39 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T17 evaluator challenge | ✅ selesai | ✅ **lolos** — cakupan 91,4% |
 | T18 anti-replay | ✅ selesai | ✅ **lolos** — cakupan 93,6% |
 | T19 liveness.Service | ✅ selesai | ✅ **lolos** — cakupan 89,9%, sesi end-to-end |
-| T14 Postgres + migrasi | ⬜ berikutnya | — |
-| T15 session repository | ⬜ | — |
-| T20 handler HTTP | ⬜ | — |
-| T21 demo web UI | ⬜ | — |
+| T14 Postgres + migrasi | ✅ selesai | ✅ **lolos** — migrasi naik/turun/naik di Postgres sungguhan |
+| T15 session repository | ✅ selesai | ✅ **lolos** — round-trip, optimistic lock, purge |
+| T20 handler HTTP | ✅ selesai | ✅ **lolos** — cakupan 83,7% |
+| T21 demo web UI | ✅ selesai | ⚠ **belum diverifikasi dengan webcam** — lihat Checkpoint A |
+| **Checkpoint 4** | — | ⚠ **SEBAGIAN** — A1/A4 lolos, A2/A3/A5/A6 belum |
+| T22 skema pgvector + HNSW | ⬜ berikutnya | — |
+| T23 object store MinIO | ⬜ | — |
+| T24 liveness token | ⬜ | — |
+| T25 enrollment.Service | ⬜ | — |
+| T26 handler HTTP faces | ⬜ | — |
+| T27 audit log | ⬜ | — |
+| T28 suite regresi serangan | ⬜ | — |
+| T29 observability + readyz | ⬜ | — |
+| T30 harness kalibrasi | ⛔ diblokir | Open Question #2 dan #3 |
+| T31 README + verifikasi akhir | ⬜ | — |
+
+### Ditemukan setelah tabel di atas ditulis
+
+Empat bug yang hanya muncul saat dipakai orang sungguhan, semuanya sudah
+diperbaiki dan dikunci dengan test:
+
+1. **Frame dikirim 480 px** — wajah terukur 105–111 px terhadap lantai 112, jadi
+   **setiap** frame ditolak sebelum satu pun challenge dievaluasi. 152 frame,
+   nol pengukuran.
+2. **Ambang kedip mustahil dipenuhi** — 0 dari 34 frame pernah mencapai EAR 0,30.
+   Sekarang relatif terhadap bukaan mata subjek sendiri.
+3. **Anti-spoof menolak 100% pengguna asli** — skor 0,006 terhadap ambang 0,80.
+   Penegakannya dimatikan; jalur Go terbukti setia terhadap PyTorch aslinya,
+   jadi ini bukan bug implementasi.
+4. **Model pose nyaris koplanar** — ujung hidung hilang, enam dari tujuh titik
+   dalam rentang 10 mm.
+
+Yang menyatukan keempatnya: semuanya lolos setiap test yang ada saat itu.
 
 ### Koreksi terhadap SPEC §5: dedup pHash tidak boleh mematikan sesi
 
