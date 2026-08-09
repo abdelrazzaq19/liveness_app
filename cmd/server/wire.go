@@ -79,6 +79,7 @@ func build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*app, err
 		}},
 		Guard: liveness.Guard{
 			MinLivenessScore:  cfg.Liveness.MinScore,
+			EnforceAntiSpoof:  cfg.Liveness.EnforceAntiSpoof,
 			IdentityCosineMin: cfg.Liveness.IdentityCosineMin,
 			PHashMinDistance:  cfg.Imaging.PHashMinDistance,
 

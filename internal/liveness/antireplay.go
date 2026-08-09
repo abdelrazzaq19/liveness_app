@@ -57,6 +57,25 @@ type Guard struct {
 	// MinLivenessScore is the passive anti-spoof threshold.
 	MinLivenessScore float64
 
+	// EnforceAntiSpoof decides whether falling below MinLivenessScore ends the
+	// session or is merely recorded.
+	//
+	// True is the only defensible default, and it is the default. It is
+	// switchable because the bundled MiniFASNetV2 conversion scores real faces
+	// at about 0.006 against a 0.80 threshold — it rejects every genuine
+	// subject. A gate that refuses everyone provides no security and no
+	// usability at once: it stops no attacker, because no session ever gets far
+	// enough to be attacked.
+	//
+	// Lowering the threshold instead would be worse than switching this off,
+	// because it would look like a working defence while admitting a printed
+	// photograph just as readily. Turning it off says plainly that the defence
+	// is absent.
+	//
+	// The score is still computed and still logged while this is false. What
+	// stops is the session ending because of it.
+	EnforceAntiSpoof bool
+
 	// IdentityCosineMin is the similarity a key frame must keep with the
 	// session's first one.
 	//
@@ -154,7 +173,7 @@ func (g Guard) CheckRequest(s *Session, f Frame) error {
 // first — otherwise holding a printed photo steady would be a way to have the
 // spoof and identity checks skipped entirely.
 func (g Guard) CheckAnalysis(s *Session, f Frame, face biometric.Face) error {
-	if face.LivenessScore < g.MinLivenessScore {
+	if g.SpoofSuspected(face) && g.EnforceAntiSpoof {
 		// The score itself is not in the error: it goes to the audit trail, not
 		// to a client who could use it to tune an attack.
 		return ErrSpoofDetected
@@ -171,6 +190,16 @@ func (g Guard) CheckAnalysis(s *Session, f Frame, face biometric.Face) error {
 		return ErrDuplicateFrame
 	}
 	return nil
+}
+
+// SpoofSuspected reports whether the passive check would reject this frame,
+// regardless of whether it is being enforced.
+//
+// Exported so the service can record a suspicion it is not acting on. A
+// defence that has been switched off must still be visible in the logs, or
+// nobody discovers it is off until they need it.
+func (g Guard) SpoofSuspected(face biometric.Face) bool {
+	return face.LivenessScore < g.MinLivenessScore
 }
 
 // checkIdentity compares a key frame against the session's reference.

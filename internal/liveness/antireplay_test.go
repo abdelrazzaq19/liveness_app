@@ -13,6 +13,7 @@ import (
 func testGuard() Guard {
 	return Guard{
 		MinLivenessScore:   0.80,
+		EnforceAntiSpoof:   true,
 		IdentityCosineMin:  0.70,
 		PHashMinDistance:   5,
 		MaxDuplicateStreak: 8,

@@ -55,6 +55,17 @@ func run() error {
 		)
 	}
 
+	// A defence that has been switched off has to announce itself on every
+	// boot. The alternative is that it stays off because nobody remembers, and
+	// the only record is a line in a file nobody opens.
+	if !cfg.Liveness.EnforceAntiSpoof {
+		log.Warn("passive anti-spoof is NOT enforced: printed photographs and screen replays are not blocked by it",
+			slog.Float64("threshold_still_measured", cfg.Liveness.MinScore),
+			slog.String("reason", "the bundled MiniFASNetV2 conversion scores real faces near 0.006 and rejects every genuine subject"),
+			slog.String("hint", "set LV_LIVENESS_ANTISPOOF_ENFORCE=true once the model is calibrated; this system is not PAD-compliant while it is off"),
+		)
+	}
+
 	// Everything that can fail about the wiring fails here, before the listener
 	// opens. A service that accepts connections it cannot serve is worse than
 	// one that refuses to start.

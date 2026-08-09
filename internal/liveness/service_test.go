@@ -1029,6 +1029,73 @@ func TestTooSmallAFaceIsToldToMoveCloser(t *testing.T) {
 	}
 }
 
+// Enforcement is what the switch controls, not measurement.
+//
+// The bundled anti-spoof conversion scores real faces near 0.006 against a 0.80
+// threshold, so enforcing it refuses every genuine subject. Switching it off
+// has to stop the session ending and nothing else: the score is still computed,
+// still compared, and still reported as a suspicion.
+func TestAntiSpoofEnforcementIsSeparateFromMeasurement(t *testing.T) {
+	spoofy := biometric.Face{LivenessScore: 0.006, EAR: 0.40, MAR: 0.90}
+
+	t.Run("enforced, the session ends", func(t *testing.T) {
+		h := newHarness(t, nil) // testGuard enforces
+		s, _ := h.svc.Start(context.Background())
+		h.analyzer.faces = []biometric.Face{spoofy}
+
+		_, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x1234_5678_9ABC_DEF0)
+		if err == nil {
+			t.Fatal("a frame below the threshold was accepted while enforcement was on")
+		}
+
+		final, _ := h.repo.Get(context.Background(), s.ID)
+		if final.State != StateFailed {
+			t.Errorf("state = %s, want %s", final.State, StateFailed)
+		}
+	})
+
+	t.Run("not enforced, the session continues", func(t *testing.T) {
+		h := newHarness(t, func(d *Deps) { d.Guard.EnforceAntiSpoof = false })
+		s, _ := h.svc.Start(context.Background())
+
+		stored, _ := h.repo.Get(context.Background(), s.ID)
+		stored.Challenges = []ChallengeKind{ChallengeMouthOpen}
+		stored.Current = 0
+		_ = h.repo.Update(context.Background(), stored)
+
+		h.analyzer.faces = []biometric.Face{spoofy}
+
+		got, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x1234_5678_9ABC_DEF0)
+		if err != nil {
+			t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
+		}
+		if !got.Advanced {
+			t.Errorf("the challenge was not evaluated: %+v", got)
+		}
+
+		final, _ := h.repo.Get(context.Background(), s.ID)
+		if final.State == StateFailed {
+			t.Error("the session was failed despite enforcement being off")
+		}
+	})
+
+	// Measurement is unchanged either way: the suspicion is still available for
+	// the audit trail and the logs.
+	t.Run("the suspicion is still reported", func(t *testing.T) {
+		for _, enforce := range []bool{true, false} {
+			g := testGuard()
+			g.EnforceAntiSpoof = enforce
+
+			if !g.SpoofSuspected(spoofy) {
+				t.Errorf("enforce=%v: a 0.006 score is not reported as suspected", enforce)
+			}
+			if g.SpoofSuspected(biometric.Face{LivenessScore: 0.95}) {
+				t.Errorf("enforce=%v: a 0.95 score is reported as suspected", enforce)
+			}
+		}
+	})
+}
+
 func TestUnknownSessionIsReported(t *testing.T) {
 	h := newHarness(t, nil)
 

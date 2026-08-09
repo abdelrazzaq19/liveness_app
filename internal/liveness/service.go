@@ -366,6 +366,19 @@ func (s *Service) SubmitFrame(ctx context.Context, id SessionID, in FrameInput) 
 		)
 	}
 
+	// A suspicion that is not being acted on still has to be visible, and at a
+	// level someone reads. Otherwise the only record that the passive defence
+	// is switched off lives in a configuration file nobody opens until after
+	// the incident.
+	if !s.deps.Guard.EnforceAntiSpoof && s.deps.Guard.SpoofSuspected(face) {
+		s.deps.Logger.WarnContext(ctx, "passive anti-spoof would have rejected this frame, but enforcement is off",
+			slog.String("session_id", session.ID.String()),
+			slog.Int64("seq", in.Seq),
+			slog.Float64("liveness", face.LivenessScore),
+			slog.Float64("liveness_min", s.deps.Guard.MinLivenessScore),
+		)
+	}
+
 	// A recoverable rejection must not stop the frame being evaluated.
 	//
 	// Every challenge asks the subject to hold a pose — eyes shut, mouth open,

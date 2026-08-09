@@ -176,6 +176,11 @@ type Liveness struct {
 	MinDetectionScore float64
 	MinScore          float64
 
+	// EnforceAntiSpoof decides whether a frame below MinScore ends the session
+	// or is only recorded. True is the default; see the Guard field of the same
+	// name for why it is switchable at all.
+	EnforceAntiSpoof bool
+
 	EARBlink       float64 // Eye aspect ratio below this counts as closed.
 	EAROpen        float64 // Eye aspect ratio above this counts as open again.
 	BlinkMinFrames int
@@ -273,6 +278,7 @@ func load(getenv func(string) string) (*Config, error) {
 			MaxChallengeRetries: l.intRange("LV_LIVENESS_MAX_RETRIES", 2, 0, 5),
 			MinDetectionScore:   l.float("LV_LIVENESS_MIN_DETECTION_SCORE", 0.60, 0, 1),
 			MinScore:            l.float("LV_LIVENESS_MIN_SCORE", 0.80, 0, 1),
+			EnforceAntiSpoof:    l.boolean("LV_LIVENESS_ANTISPOOF_ENFORCE", true),
 			EARBlink:            l.float("LV_LIVENESS_EAR_BLINK", 0.21, 0, 1),
 			EAROpen:             l.float("LV_LIVENESS_EAR_OPEN", 0.30, 0, 1),
 			BlinkMinFrames:      l.intRange("LV_LIVENESS_BLINK_MIN_FRAMES", 2, 1, 30),
