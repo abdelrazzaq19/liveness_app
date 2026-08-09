@@ -51,7 +51,10 @@ func NewEmbedderArcFace(pool *Pool) (*EmbedderArcFace, error) {
 		return nil, fmt.Errorf("onnx: embedder expects a %dx%d input, model %q declares %v",
 			arcFaceInputSize, arcFaceInputSize, pool.Name(), dims)
 	}
-	if dims := outputs[0].Dimensions; dims[len(dims)-1] != biometric.EmbeddingDim {
+	// Guarded on length first: an output with no declared dimensions is legal in
+	// a graph and reading its last element panics. See the same check in
+	// NewAntiSpoofMiniFASNet.
+	if dims := outputs[0].Dimensions; len(dims) == 0 || dims[len(dims)-1] != biometric.EmbeddingDim {
 		return nil, fmt.Errorf("onnx: embedder expects %d output dimensions, model %q declares %v",
 			biometric.EmbeddingDim, pool.Name(), dims)
 	}

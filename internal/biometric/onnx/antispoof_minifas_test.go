@@ -229,6 +229,21 @@ func TestNewAntiSpoofRejectsWrongGraphShape(t *testing.T) {
 		}
 	})
 
+	// A constructor whose whole job is to reject the wrong model must not crash
+	// on one. An output with no declared dimensions is what a graph emitting a
+	// scalar looks like, and reading its last dimension walks off the front of
+	// the slice — so pointing the service at the wrong .onnx would panic during
+	// boot instead of naming the mismatch.
+	t.Run("output with no dimensions", func(t *testing.T) {
+		p, _ := newFakePool(t, 1)
+		p.all[0].Inputs = []ort.InputOutputInfo{{Dimensions: ort.NewShape(1, 3, antiSpoofInputSize, antiSpoofInputSize)}}
+		p.all[0].Outputs = []ort.InputOutputInfo{{Dimensions: ort.NewShape()}}
+
+		if _, err := NewAntiSpoofMiniFASNet(p); err == nil {
+			t.Error("NewAntiSpoofMiniFASNet() accepted an output with no dimensions, want an error")
+		}
+	})
+
 	t.Run("matching graph", func(t *testing.T) {
 		p, _ := newFakePool(t, 1)
 		p.all[0].Inputs = []ort.InputOutputInfo{{Dimensions: ort.NewShape(1, 3, antiSpoofInputSize, antiSpoofInputSize)}}

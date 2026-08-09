@@ -59,7 +59,12 @@ func NewAntiSpoofMiniFASNet(pool *Pool) (*AntiSpoofMiniFASNet, error) {
 		return nil, fmt.Errorf("onnx: anti-spoofer expects a %dx%d input, model %q declares %v",
 			antiSpoofInputSize, antiSpoofInputSize, pool.Name(), dims)
 	}
-	if dims := outputs[0].Dimensions; dims[len(dims)-1] != antiSpoofClasses {
+	// len(dims) is checked first for the same reason the input check above does
+	// it: a graph is free to declare an output with no dimensions at all, and
+	// reading the last element of an empty shape panics. This constructor exists
+	// to name a mismatched model, so crashing on the most mismatched one there
+	// is would defeat it — during boot, where the pools are built.
+	if dims := outputs[0].Dimensions; len(dims) == 0 || dims[len(dims)-1] != antiSpoofClasses {
 		return nil, fmt.Errorf("onnx: anti-spoofer expects %d output classes, model %q declares %v",
 			antiSpoofClasses, pool.Name(), dims)
 	}
