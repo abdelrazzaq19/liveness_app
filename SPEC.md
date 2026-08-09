@@ -272,7 +272,7 @@ Sesi dianggap valid hanya jika **semua** ini terpenuhi:
 
 1. **Challenge acak** — 3 challenge dipilih dan diurutkan acak per sesi; video rekaman tidak akan cocok dengan urutan yang belum diketahui.
 2. **Nonce + sequence** — `seq` harus naik monoton; frame duplikat/ mundur ditolak.
-3. **Batas waktu** — sesi kedaluwarsa dalam 90 detik; tiap challenge maksimal 5 detik, dihitung mundur di layar.
+3. **Batas waktu** — sesi kedaluwarsa dalam 90 detik; tiap challenge maksimal 5 detik, dihitung mundur di layar. Challenge yang kehabisan waktu diulang, bukan menggagalkan sesi — maksimal 2 kali untuk seluruh sesi (`LV_LIVENESS_MAX_RETRIES`), dengan progres challenge direset supaya sebuah kedipan tidak bisa dirakit dari dua percobaan. TTL sesi adalah batas keras yang tidak bisa dilampaui berapa pun sisa kesempatannya.
 4. **Dedup perceptual hash** — dua frame dengan Hamming distance pHash < 5 dianggap frame yang sama (indikasi replay statis).
 5. **Passive anti-spoof per frame** — MiniFASNetV2; frame dengan skor spoof di atas ambang langsung menggagalkan sesi.
 6. **Konsistensi identitas lintas frame** — embedding ArcFace tiap frame kunci harus cosine ≥ 0.70 terhadap frame pertama. Mencegah pergantian wajah di tengah sesi.

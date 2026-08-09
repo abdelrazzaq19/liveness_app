@@ -163,6 +163,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	want.LastSeq = 42
 	want.RecentHashes = []uint64{0xFFFF_FFFF_FFFF_FFFF, 1, 0x8000_0000_0000_0000}
 	want.DuplicateStreak = 3
+	want.Retries = 2
 	want.Progress = liveness.Progress{
 		ClosedFrames: 2, SawClose: true,
 		BaselineYaw: -12.5, BaselinePitch: 3.25, HaveBaseline: true,
@@ -197,6 +198,11 @@ func TestSessionRoundTrip(t *testing.T) {
 	if got.LastSeq != want.LastSeq || got.DuplicateStreak != want.DuplicateStreak {
 		t.Errorf("last seq / streak = %d/%d, want %d/%d",
 			got.LastSeq, got.DuplicateStreak, want.LastSeq, want.DuplicateStreak)
+	}
+	// The retry budget has to survive the round trip, or a session reloaded
+	// between frames would hand back attempts it had already spent.
+	if got.Retries != want.Retries {
+		t.Errorf("retries = %d, want %d", got.Retries, want.Retries)
 	}
 	if got.Progress != want.Progress {
 		t.Errorf("progress = %+v, want %+v", got.Progress, want.Progress)
