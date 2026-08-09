@@ -199,6 +199,15 @@ type Liveness struct {
 
 // Enrollment holds gallery matching and pgvector HNSW index settings.
 type Enrollment struct {
+	// StoreArtifacts decides whether the aligned crop is kept alongside the
+	// embedding.
+	//
+	// Off by default. A stored crop is biometric data in its most directly
+	// usable form: an embedding at least needs a model to interpret it, a
+	// photograph needs nothing. Keeping one should be a decision somebody made,
+	// not a side effect of enrolling.
+	StoreArtifacts bool
+
 	MatchCosineMin     float64
 	SearchTopK         int
 	HNSWM              int
@@ -293,6 +302,7 @@ func load(getenv func(string) string) (*Config, error) {
 			IdentityCosineMin: l.float("LV_LIVENESS_IDENTITY_COSINE_MIN", 0.70, 0, 1),
 		},
 		Enrollment: Enrollment{
+			StoreArtifacts:     l.boolean("LV_ENROLL_STORE_ARTIFACTS", false),
 			MatchCosineMin:     l.float("LV_ENROLL_MATCH_COSINE_MIN", 0.42, 0, 1),
 			SearchTopK:         l.intRange("LV_ENROLL_SEARCH_TOP_K", 5, 1, 1000),
 			HNSWM:              l.intRange("LV_ENROLL_HNSW_M", 16, 2, 100),
