@@ -123,15 +123,27 @@ type Match struct {
 // judgement, and a repository that silently filtered would make that decision
 // untestable and invisible.
 type Repository interface {
-	Insert(ctx context.Context, f Face) error
+	// Insert stores a face together with the audit entry describing it, in one
+	// transaction.
+	//
+	// The two travel together because the rule they enforce is only real if they
+	// cannot come apart: a stored template with no record of who stored it, or
+	// on whose authority, is precisely what an audit trail exists to prevent. An
+	// interface that took them separately would make that a habit somebody has
+	// to remember rather than something the type system insists on.
+	Insert(ctx context.Context, f Face, entry AuditEntry) error
 
 	// Search returns at most topK candidates, most similar first.
 	Search(ctx context.Context, query biometric.Embedding, topK int) ([]Match, error)
 
 	// DeleteSubject removes every face belonging to a subject and reports how
-	// many rows went. The embedding is deleted outright rather than flagged:
-	// a biometric template that is still readable has not been deleted.
-	DeleteSubject(ctx context.Context, subjectID string) (int, error)
+	// many rows went. The embedding is deleted outright rather than flagged: a
+	// biometric template that is still readable has not been deleted.
+	//
+	// The audit entry is written in the same transaction and survives the rows
+	// it describes. That is the whole point of keeping the trail in a separate
+	// table: the record of a deletion must outlive the deletion.
+	DeleteSubject(ctx context.Context, subjectID string, entry AuditEntry) (int, error)
 
 	// Count reports how many faces are in the gallery, for readiness reporting
 	// and for telling an empty gallery apart from a failed match.

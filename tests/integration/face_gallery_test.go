@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,18 +69,40 @@ func testFace(id, subject string, e biometric.Embedding) enrollment.Face {
 	}
 }
 
+// auditFor is the entry that must accompany a face. The repository will not
+// take one without the other, which is the point.
+func auditFor(f enrollment.Face) enrollment.AuditEntry {
+	return enrollment.AuditEntry{
+		At: time.Now(), Action: enrollment.AuditEnroll, Outcome: enrollment.AuditOK,
+		SubjectID: f.SubjectID, FaceID: f.ID, SessionID: f.SessionID, Affected: 1,
+	}
+}
+
+func deleteAudit(subject string) enrollment.AuditEntry {
+	return enrollment.AuditEntry{
+		At: time.Now(), Action: enrollment.AuditDelete, Outcome: enrollment.AuditOK,
+		SubjectID: subject,
+	}
+}
+
+// insert stores a face with its entry, which is the only way the repository
+// accepts one.
+func insert(repo *postgres.FaceRepo, ctx context.Context, f enrollment.Face) error {
+	return repo.Insert(ctx, f, auditFor(f))
+}
+
 func TestFaceRoundTripAndSearch(t *testing.T) {
 	repo := newFaceRepo(t, 64)
 	ctx := context.Background()
 	rng := rand.New(rand.NewSource(1))
 
 	mine := randomEmbedding(rng)
-	if err := repo.Insert(ctx, testFace("face-1", "subject-a", mine)); err != nil {
+	if err := insert(repo, ctx, testFace("face-1", "subject-a", mine)); err != nil {
 		t.Fatalf("Insert() returned an unexpected error: %v", err)
 	}
 	for i := 0; i < 20; i++ {
 		f := testFace(fmt.Sprintf("other-%d", i), fmt.Sprintf("subject-%d", i), randomEmbedding(rng))
-		if err := repo.Insert(ctx, f); err != nil {
+		if err := insert(repo, ctx, f); err != nil {
 			t.Fatalf("Insert() returned an unexpected error: %v", err)
 		}
 	}
@@ -119,7 +142,7 @@ func TestEmbeddingSurvivesStorageExactly(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 
 	e := randomEmbedding(rng)
-	if err := repo.Insert(ctx, testFace("exact-1", "subject-exact", e)); err != nil {
+	if err := insert(repo, ctx, testFace("exact-1", "subject-exact", e)); err != nil {
 		t.Fatalf("Insert() returned an unexpected error: %v", err)
 	}
 
@@ -166,7 +189,7 @@ func TestInsertRefusesFacesThatCannotBeTraced(t *testing.T) {
 			f := good
 			tt.break_(&f)
 
-			if err := repo.Insert(ctx, f); err == nil {
+			if err := repo.Insert(ctx, f, auditFor(f)); err == nil {
 				t.Error("Insert() accepted a face that cannot be traced or compared")
 			}
 		})
@@ -183,16 +206,16 @@ func TestDeleteSubjectRemovesEveryFace(t *testing.T) {
 	var theirs biometric.Embedding
 	for i := 0; i < 3; i++ {
 		theirs = randomEmbedding(rng)
-		if err := repo.Insert(ctx, testFace(fmt.Sprintf("del-%d", i), "subject-gone", theirs)); err != nil {
+		if err := insert(repo, ctx, testFace(fmt.Sprintf("del-%d", i), "subject-gone", theirs)); err != nil {
 			t.Fatalf("Insert() returned an unexpected error: %v", err)
 		}
 	}
 	keep := randomEmbedding(rng)
-	if err := repo.Insert(ctx, testFace("keep-1", "subject-stays", keep)); err != nil {
+	if err := insert(repo, ctx, testFace("keep-1", "subject-stays", keep)); err != nil {
 		t.Fatalf("Insert() returned an unexpected error: %v", err)
 	}
 
-	n, err := repo.DeleteSubject(ctx, "subject-gone")
+	n, err := repo.DeleteSubject(ctx, "subject-gone", deleteAudit("subject-gone"))
 	if err != nil {
 		t.Fatalf("DeleteSubject() returned an unexpected error: %v", err)
 	}
@@ -251,7 +274,7 @@ func TestGalleryMeetsCheckpointB(t *testing.T) {
 		stored[i] = randomEmbedding(rng)
 		subjects[i] = fmt.Sprintf("subject-%05d", i)
 
-		if err := repo.Insert(ctx, testFace(fmt.Sprintf("bulk-%05d", i), subjects[i], stored[i])); err != nil {
+		if err := insert(repo, ctx, testFace(fmt.Sprintf("bulk-%05d", i), subjects[i], stored[i])); err != nil {
 			t.Fatalf("Insert() at row %d: %v", i, err)
 		}
 	}
@@ -301,5 +324,127 @@ func TestGalleryMeetsCheckpointB(t *testing.T) {
 	}
 	if recall < 0.98 {
 		t.Errorf("recall@1 = %.3f against brute force, want at least 0.98", recall)
+	}
+}
+
+// The rule this whole table exists for: no template is stored without a record
+// of it. Proved by making the audit write impossible and checking that the face
+// did not survive either.
+func TestAFaceCannotBeStoredWithoutItsAuditEntry(t *testing.T) {
+	repo := newFaceRepo(t, 64)
+	ctx := context.Background()
+	rng := rand.New(rand.NewSource(21))
+
+	f := testFace("atomic-1", "subject-atomic", randomEmbedding(rng))
+
+	// An entry the schema will reject: the CHECK constraint on action fires
+	// inside the same transaction as the face insert.
+	bad := auditFor(f)
+	bad.Action = "NOT_AN_ACTION"
+
+	if err := repo.Insert(ctx, f, bad); err == nil {
+		t.Fatal("Insert() succeeded with an audit entry the schema cannot accept")
+	}
+
+	// The face must have gone with it.
+	got, err := repo.Search(ctx, f.Embedding, 1)
+	if err != nil {
+		t.Fatalf("Search() returned an unexpected error: %v", err)
+	}
+	for _, m := range got {
+		if m.FaceID == f.ID {
+			t.Error("the face was stored even though its audit entry was not")
+		}
+	}
+
+	n, err := repo.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count() returned an unexpected error: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("the gallery holds %d faces after a rolled-back insert, want 0", n)
+	}
+}
+
+// The record of a deletion must outlive the rows it describes. That is why the
+// trail is a separate table.
+func TestTheAuditTrailSurvivesTheDeletion(t *testing.T) {
+	db := migrated(t)
+	ctx := context.Background()
+
+	if _, err := db.Pool.Exec(ctx, "DELETE FROM faces"); err != nil {
+		t.Fatalf("could not clear the gallery: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, "DELETE FROM face_audit"); err != nil {
+		t.Fatalf("could not clear the audit trail: %v", err)
+	}
+
+	repo, err := postgres.NewFaceRepo(db, 64)
+	if err != nil {
+		t.Fatalf("NewFaceRepo() returned an unexpected error: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(23))
+	for i := 0; i < 2; i++ {
+		f := testFace(fmt.Sprintf("gone-%d", i), "subject-erased", randomEmbedding(rng))
+		if err := insert(repo, ctx, f); err != nil {
+			t.Fatalf("Insert() returned an unexpected error: %v", err)
+		}
+	}
+
+	n, err := repo.DeleteSubject(ctx, "subject-erased", deleteAudit("subject-erased"))
+	if err != nil {
+		t.Fatalf("DeleteSubject() returned an unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d faces, want 2", n)
+	}
+
+	// Two enrollments and one deletion, all still readable.
+	var enrolls, deletes, affected int
+	err = db.Pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE action = 'ENROLL'),
+			count(*) FILTER (WHERE action = 'DELETE'),
+			coalesce(sum(affected) FILTER (WHERE action = 'DELETE'), 0)
+		FROM face_audit WHERE subject_id = $1`, "subject-erased").Scan(&enrolls, &deletes, &affected)
+	if err != nil {
+		t.Fatalf("could not read the audit trail: %v", err)
+	}
+
+	if enrolls != 2 || deletes != 1 {
+		t.Errorf("trail holds %d enrolments and %d deletions, want 2 and 1", enrolls, deletes)
+	}
+	if affected != 2 {
+		t.Errorf("the deletion recorded %d faces removed, want 2", affected)
+	}
+}
+
+// The trail must never carry the template. It is the record kept longest and
+// read most widely.
+func TestTheAuditTableHoldsNoBiometrics(t *testing.T) {
+	db := migrated(t)
+
+	rows, err := db.Pool.Query(context.Background(), `
+		SELECT column_name, data_type FROM information_schema.columns
+		WHERE table_name = 'face_audit'`)
+	if err != nil {
+		t.Fatalf("could not read the schema: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if typ == "USER-DEFINED" || typ == "ARRAY" || typ == "bytea" {
+			t.Errorf("column %s is %s; the audit trail must hold no vectors or blobs", name, typ)
+		}
+		for _, banned := range []string{"embedding", "vector", "descriptor", "image", "crop"} {
+			if strings.Contains(name, banned) {
+				t.Errorf("column %s looks like biometric data", name)
+			}
+		}
 	}
 }

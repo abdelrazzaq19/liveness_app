@@ -182,6 +182,7 @@ func buildEnrollment(
 		Analyzer:       analyzer,
 		Artifacts:      artifacts,
 		EncodeArtifact: encodeAlignedCrop,
+		Audit:          faces,
 		IDs:            randomFaceIDs{},
 		Clock:          liveness.SystemClock{},
 		Logger:         log,

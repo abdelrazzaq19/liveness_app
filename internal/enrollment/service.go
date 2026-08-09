@@ -103,6 +103,11 @@ type Deps struct {
 	// EncodeArtifact is only consulted when Config.StoreArtifacts is on.
 	EncodeArtifact ArtifactEncoder
 
+	// Audit records actions that do not write to the gallery: searches, and
+	// attempts that were refused. Gallery writes are audited by the repository
+	// in the same transaction as the row they describe.
+	Audit Audit
+
 	IDs    IDGenerator
 	Clock  Clock
 	Logger *slog.Logger
@@ -231,6 +236,10 @@ func (s *Service) Enroll(ctx context.Context, in EnrollInput) (EnrollResult, err
 			slog.Float64("similarity", similarity),
 			slog.Float64("required", s.deps.Config.IdentityCosineMin),
 		)
+		s.recordRefusal(ctx, AuditEntry{
+			At: now, Action: AuditEnroll, Outcome: AuditRefused,
+			SubjectID: in.SubjectID, SessionID: sessionID,
+		})
 		return EnrollResult{}, ErrIdentityMismatch
 	}
 
@@ -259,7 +268,12 @@ func (s *Service) Enroll(ctx context.Context, in EnrollInput) (EnrollResult, err
 		stored.ArtifactKey = key
 	}
 
-	if err := s.deps.Faces.Insert(ctx, stored); err != nil {
+	entry := AuditEntry{
+		At: now, Action: AuditEnroll, Outcome: AuditOK,
+		SubjectID: in.SubjectID, FaceID: id, SessionID: sessionID,
+		Affected: 1,
+	}
+	if err := s.deps.Faces.Insert(ctx, stored, entry); err != nil {
 		return EnrollResult{}, fmt.Errorf("enrollment: store face: %w", err)
 	}
 
@@ -319,6 +333,22 @@ func (s *Service) Search(ctx context.Context, img image.Image) (SearchResult, er
 		result.Matched = true
 		result.Best = candidates[0]
 	}
+
+	// Knowing who was looked for is part of knowing how the system was used, so
+	// a search leaves a trail whether or not it found anybody.
+	if s.deps.Audit != nil {
+		entry := AuditEntry{At: s.deps.Clock.Now(), Action: AuditSearch, Outcome: AuditOK}
+		if result.Matched {
+			entry.SubjectID = result.Best.SubjectID
+			entry.FaceID = result.Best.FaceID
+			entry.Affected = 1
+		}
+		if err := s.deps.Audit.Record(ctx, entry); err != nil {
+			s.deps.Logger.ErrorContext(ctx, "could not record a search in the audit trail",
+				slog.String("error", err.Error()))
+		}
+	}
+
 	return result, nil
 }
 
@@ -328,7 +358,10 @@ func (s *Service) DeleteSubject(ctx context.Context, subjectID string) (int, err
 		return 0, errors.New("enrollment: subject_id is required")
 	}
 
-	n, err := s.deps.Faces.DeleteSubject(ctx, subjectID)
+	n, err := s.deps.Faces.DeleteSubject(ctx, subjectID, AuditEntry{
+		At: s.deps.Clock.Now(), Action: AuditDelete, Outcome: AuditOK,
+		SubjectID: subjectID,
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -352,4 +385,25 @@ func (s *Service) storeArtifact(ctx context.Context, key string, img image.Image
 		return fmt.Errorf("enrollment: store artifact: %w", err)
 	}
 	return nil
+}
+
+// recordRefusal writes a rejected attempt to the trail.
+//
+// Best effort, and deliberately so: a refusal that cannot be recorded is still
+// a refusal, and turning an audit failure into a different answer for the
+// caller would tell them something about the state of the system they have no
+// business learning. The failure goes to the log, where an operator sees it.
+//
+// Successful writes are not best effort. Those go through the repository in the
+// same transaction as the row, because a stored template with no record of it
+// is the one case that must be impossible rather than merely unlikely.
+func (s *Service) recordRefusal(ctx context.Context, e AuditEntry) {
+	if s.deps.Audit == nil {
+		return
+	}
+	if err := s.deps.Audit.Record(ctx, e); err != nil {
+		s.deps.Logger.ErrorContext(ctx, "could not record a refused attempt in the audit trail",
+			slog.String("action", string(e.Action)),
+			slog.String("error", err.Error()))
+	}
 }

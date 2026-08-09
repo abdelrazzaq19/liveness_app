@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/ziad/liveness-verifier/internal/biometric"
 	"github.com/ziad/liveness-verifier/internal/enrollment"
 )
@@ -23,7 +25,10 @@ type FaceRepo struct {
 	efSearch int
 }
 
-var _ enrollment.Repository = (*FaceRepo)(nil)
+var (
+	_ enrollment.Repository = (*FaceRepo)(nil)
+	_ enrollment.Audit      = (*FaceRepo)(nil)
+)
 
 // NewFaceRepo wraps a pool as a face repository.
 func NewFaceRepo(db *DB, efSearch int) (*FaceRepo, error) {
@@ -36,27 +41,50 @@ func NewFaceRepo(db *DB, efSearch int) (*FaceRepo, error) {
 	return &FaceRepo{db: db, efSearch: efSearch}, nil
 }
 
-// Insert adds one enrolled capture.
-func (r *FaceRepo) Insert(ctx context.Context, f enrollment.Face) error {
+// Insert adds one enrolled capture together with its audit entry.
+//
+// One transaction, because the rule is that no template is stored without a
+// record of it. Two statements outside a transaction would satisfy that rule
+// almost always, and "almost always" is the same as "not" for an audit trail:
+// the cases it misses are exactly the crashes somebody would later be trying to
+// reconstruct.
+func (r *FaceRepo) Insert(ctx context.Context, f enrollment.Face, entry enrollment.AuditEntry) error {
 	if err := f.Validate(); err != nil {
 		return fmt.Errorf("postgres: refusing to store face: %w", err)
 	}
-
-	const query = `
-		INSERT INTO faces (id, subject_id, embedding, session_id, artifact_key)
-		VALUES ($1, $2, $3, $4, $5)`
+	if err := entry.Validate(); err != nil {
+		return fmt.Errorf("postgres: refusing to store face without a usable audit entry: %w", err)
+	}
 
 	var artifact any
 	if f.ArtifactKey != "" {
 		artifact = f.ArtifactKey
 	}
 
-	_, err := r.db.Pool.Exec(ctx, query,
-		string(f.ID), f.SubjectID, vectorLiteral(f.Embedding), f.SessionID, artifact)
+	tx, err := r.db.Pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("postgres: begin insert face: %w", err)
+	}
+	// Rolls back unless Commit already ran, in which case it is a no-op.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const insertFace = `
+		INSERT INTO faces (id, subject_id, embedding, session_id, artifact_key)
+		VALUES ($1, $2, $3, $4, $5)`
+
+	if _, err := tx.Exec(ctx, insertFace,
+		string(f.ID), f.SubjectID, vectorLiteral(f.Embedding), f.SessionID, artifact); err != nil {
 		// The id is safe to name; the subject is not, and neither is anything
 		// derived from the template.
 		return fmt.Errorf("postgres: insert face %s: %w", f.ID, err)
+	}
+
+	if err := insertAudit(ctx, tx, entry); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: commit insert face %s: %w", f.ID, err)
 	}
 	return nil
 }
@@ -123,16 +151,88 @@ func (r *FaceRepo) Search(ctx context.Context, query biometric.Embedding, topK i
 // not been deleted, whatever a column says about it. The audit trail lives in
 // its own table precisely so that the record of the deletion survives the thing
 // deleted.
-func (r *FaceRepo) DeleteSubject(ctx context.Context, subjectID string) (int, error) {
+func (r *FaceRepo) DeleteSubject(ctx context.Context, subjectID string, entry enrollment.AuditEntry) (int, error) {
 	if subjectID == "" {
 		return 0, errors.New("postgres: subject id is required")
 	}
+	if err := entry.Validate(); err != nil {
+		return 0, fmt.Errorf("postgres: refusing to delete without a usable audit entry: %w", err)
+	}
 
-	tag, err := r.db.Pool.Exec(ctx, `DELETE FROM faces WHERE subject_id = $1`, subjectID)
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: begin delete subject: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `DELETE FROM faces WHERE subject_id = $1`, subjectID)
 	if err != nil {
 		return 0, fmt.Errorf("postgres: delete subject: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	affected := int(tag.RowsAffected())
+
+	// The count goes into the entry rather than being taken on trust from the
+	// caller: how many templates actually went is the one number a deletion has
+	// to be able to answer for afterwards.
+	entry.Affected = affected
+
+	if err := insertAudit(ctx, tx, entry); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("postgres: commit delete subject: %w", err)
+	}
+	return affected, nil
+}
+
+// Record writes a standalone audit entry, for actions that do not touch the
+// gallery.
+//
+// Gallery writes are audited inside their own transaction instead. This is only
+// for reads — a search leaves a trail too, because knowing who was looked for is
+// part of knowing how the system was used.
+func (r *FaceRepo) Record(ctx context.Context, entry enrollment.AuditEntry) error {
+	if err := entry.Validate(); err != nil {
+		return fmt.Errorf("postgres: audit entry: %w", err)
+	}
+	return insertAudit(ctx, r.db.Pool, entry)
+}
+
+// execer is what insertAudit needs: a pool or a transaction, indifferently.
+//
+// That indifference is the point. The same statement has to run inside the
+// transaction that writes a face and on its own for a search, and having one
+// function serve both is what stops the two drifting apart.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func insertAudit(ctx context.Context, q execer, e enrollment.AuditEntry) error {
+	const query = `
+		INSERT INTO face_audit (at, action, outcome, subject_id, face_id, session_id, affected)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+
+	if _, err := q.Exec(ctx, query,
+		e.At, string(e.Action), string(e.Outcome),
+		nullable(e.SubjectID), nullable(e.FaceID.String()), nullable(e.SessionID),
+		e.Affected,
+	); err != nil {
+		return fmt.Errorf("postgres: write audit entry: %w", err)
+	}
+	return nil
+}
+
+// nullable turns an empty string into a SQL NULL.
+//
+// Not every action has every field, and storing "" would make an absent value
+// indistinguishable from one that was genuinely blank when somebody reads the
+// trail years later.
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Count reports how many faces are enrolled.

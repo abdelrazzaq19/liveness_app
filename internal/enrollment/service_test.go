@@ -17,12 +17,17 @@ import (
 // --------------------------------------------------------------- test doubles
 
 type memoryFaces struct {
-	mu     sync.Mutex
-	stored []Face
-	insErr error
+	mu      sync.Mutex
+	stored  []Face
+	audited []AuditEntry
+	insErr  error
 }
 
-func (m *memoryFaces) Insert(_ context.Context, f Face) error {
+func (m *memoryFaces) Insert(_ context.Context, f Face, e AuditEntry) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	m.audited = append(m.audited, e)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.insErr != nil {
@@ -55,7 +60,11 @@ func (m *memoryFaces) Search(_ context.Context, q biometric.Embedding, topK int)
 	return out, nil
 }
 
-func (m *memoryFaces) DeleteSubject(_ context.Context, subject string) (int, error) {
+func (m *memoryFaces) DeleteSubject(_ context.Context, subject string, e AuditEntry) (int, error) {
+	if err := e.Validate(); err != nil {
+		return 0, err
+	}
+	m.audited = append(m.audited, e)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -232,6 +241,7 @@ func newHarness(t *testing.T, tweak func(*Deps)) *harness {
 		Tokens:    tokens,
 		Sessions:  sessions,
 		Analyzer:  scriptedAnalyzer{face: biometric.Face{Embedding: nearby(embeddingSeeded(1), 0.15)}},
+		Audit:     &recordingAudit{},
 		Artifacts: artifacts,
 		EncodeArtifact: func(image.Image, biometric.Keypoints) ([]byte, string, error) {
 			return []byte("aligned-crop"), "image/jpeg", nil
@@ -544,5 +554,150 @@ func TestDeleteSubjectReportsWhatItRemoved(t *testing.T) {
 
 	if _, err := h.svc.DeleteSubject(context.Background(), "subject-gone"); !errors.Is(err, ErrSubjectNotFound) {
 		t.Errorf("deleting an unknown subject returned %v, want ErrSubjectNotFound", err)
+	}
+}
+
+// recordingAudit collects standalone entries: searches and refusals.
+type recordingAudit struct {
+	mu      sync.Mutex
+	entries []AuditEntry
+	err     error
+}
+
+func (r *recordingAudit) Record(_ context.Context, e AuditEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.entries = append(r.entries, e)
+	return nil
+}
+
+// No template is stored without a record of it. The interface makes that
+// structural rather than a habit: a repository cannot be handed a face without
+// also being handed the entry describing it.
+func TestEveryStoredFaceCarriesAnAuditEntry(t *testing.T) {
+	h := newHarness(t, nil)
+
+	if _, err := h.svc.Enroll(context.Background(), EnrollInput{
+		Token: h.token(t, "session-ok"), SubjectID: "subject-1", Image: blankImage(),
+	}); err != nil {
+		t.Fatalf("Enroll() returned an unexpected error: %v", err)
+	}
+
+	if len(h.faces.stored) != len(h.faces.audited) {
+		t.Fatalf("%d faces stored but %d audit entries written", len(h.faces.stored), len(h.faces.audited))
+	}
+
+	e := h.faces.audited[0]
+	if e.Action != AuditEnroll || e.Outcome != AuditOK {
+		t.Errorf("entry = %s/%s, want %s/%s", e.Action, e.Outcome, AuditEnroll, AuditOK)
+	}
+	if e.SubjectID != "subject-1" || e.SessionID != "session-ok" {
+		t.Errorf("entry = %+v, want the subject and the session that authorised it", e)
+	}
+	if e.FaceID != h.faces.stored[0].ID {
+		t.Errorf("entry names face %s but %s was stored", e.FaceID, h.faces.stored[0].ID)
+	}
+}
+
+// A refused attempt is exactly what an auditor wants to see, so it leaves a
+// trail too.
+func TestARefusedEnrollmentIsAudited(t *testing.T) {
+	audit := &recordingAudit{}
+	h := newHarness(t, func(d *Deps) {
+		d.Analyzer = scriptedAnalyzer{face: biometric.Face{Embedding: embeddingSeeded(2)}}
+		d.Audit = audit
+	})
+
+	if _, err := h.svc.Enroll(context.Background(), EnrollInput{
+		Token: h.token(t, "session-ok"), SubjectID: "victim", Image: blankImage(),
+	}); !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("error = %v, want ErrIdentityMismatch", err)
+	}
+
+	if len(audit.entries) != 1 {
+		t.Fatalf("wrote %d audit entries for a refused attempt, want 1", len(audit.entries))
+	}
+	if got := audit.entries[0]; got.Outcome != AuditRefused || got.SubjectID != "victim" {
+		t.Errorf("entry = %+v, want a refusal against victim", got)
+	}
+}
+
+// An audit failure must not change the answer a caller gets on a refusal. It
+// would tell them something about the state of the system they have no business
+// learning, and the attempt was refused either way.
+func TestAnAuditFailureDoesNotChangeARefusal(t *testing.T) {
+	h := newHarness(t, func(d *Deps) {
+		d.Analyzer = scriptedAnalyzer{face: biometric.Face{Embedding: embeddingSeeded(2)}}
+		d.Audit = &recordingAudit{err: errors.New("audit table is gone")}
+	})
+
+	if _, err := h.svc.Enroll(context.Background(), EnrollInput{
+		Token: h.token(t, "session-ok"), SubjectID: "s", Image: blankImage(),
+	}); !errors.Is(err, ErrIdentityMismatch) {
+		t.Errorf("error = %v, want ErrIdentityMismatch despite the audit failing", err)
+	}
+}
+
+func TestSearchesAreAudited(t *testing.T) {
+	audit := &recordingAudit{}
+	h := newHarness(t, nil)
+
+	if _, err := h.svc.Enroll(context.Background(), EnrollInput{
+		Token: h.token(t, "session-ok"), SubjectID: "subject-1", Image: blankImage(),
+	}); err != nil {
+		t.Fatalf("Enroll() returned an unexpected error: %v", err)
+	}
+
+	h2 := newHarness(t, func(d *Deps) {
+		d.Faces = h.faces
+		d.Audit = audit
+		d.Analyzer = scriptedAnalyzer{face: biometric.Face{Embedding: nearby(embeddingSeeded(1), 0.15)}}
+	})
+
+	if _, err := h2.svc.Search(context.Background(), blankImage()); err != nil {
+		t.Fatalf("Search() returned an unexpected error: %v", err)
+	}
+
+	if len(audit.entries) != 1 {
+		t.Fatalf("wrote %d audit entries for a search, want 1", len(audit.entries))
+	}
+	if got := audit.entries[0]; got.Action != AuditSearch || got.SubjectID != "subject-1" {
+		t.Errorf("entry = %+v, want a search that found subject-1", got)
+	}
+}
+
+// The trail must never carry the template itself. It is the record kept longest
+// and read most widely.
+func TestAuditEntriesCarryNoBiometrics(t *testing.T) {
+	e := AuditEntry{
+		At: testStart, Action: AuditEnroll, Outcome: AuditOK,
+		SubjectID: "s", FaceID: "f", SessionID: "sess",
+	}
+
+	// A compile-time fact rather than a runtime one: if somebody adds an
+	// embedding field, this stops building.
+	var _ struct {
+		At        time.Time
+		Action    AuditAction
+		Outcome   AuditOutcome
+		SubjectID string
+		FaceID    FaceID
+		SessionID string
+		Affected  int
+	} = struct {
+		At        time.Time
+		Action    AuditAction
+		Outcome   AuditOutcome
+		SubjectID string
+		FaceID    FaceID
+		SessionID string
+		Affected  int
+	}(e)
+
+	if err := e.Validate(); err != nil {
+		t.Errorf("a well-formed entry was rejected: %v", err)
 	}
 }
