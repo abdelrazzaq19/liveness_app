@@ -93,6 +93,52 @@ video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
   .timer .arc { transition: none; }
 }
 
+/* Confirmation that a step was accepted.
+ *
+ * Over the video rather than beside it, and deliberately large: the subject is
+ * looking at the camera, and a line of text in the side panel is a line of text
+ * nobody reads. It covers the preview because for this beat there is nothing to
+ * see there — frames are paused while it is up. */
+.pass {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: 1rem;
+  text-align: center;
+  background: color-mix(in srgb, var(--ok) 82%, black);
+  animation: pass-in .18s ease-out;
+}
+
+.pass-mark {
+  width: 3.2rem;
+  height: 3.2rem;
+  display: grid;
+  place-items: center;
+  font-size: 1.9rem;
+  line-height: 1;
+  border-radius: 50%;
+  color: color-mix(in srgb, var(--ok) 80%, black);
+  background: #fff;
+  animation: pass-mark-in .32s cubic-bezier(.2, 1.4, .4, 1);
+}
+
+.pass-title { margin: .5rem 0 0; font-size: 1.25rem; font-weight: 700; }
+
+/* The next instruction, so the beat is preparation rather than only applause.
+ * The clock for that step is already running server-side. */
+.pass-next { margin: 0; opacity: .92; }
+
+@keyframes pass-in { from { opacity: 0; } }
+@keyframes pass-mark-in { from { transform: scale(.4); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pass, .pass-mark { animation: none; }
+}
+
 .badge {
   position: absolute;
   inset: auto 0 0 0;

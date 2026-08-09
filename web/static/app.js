@@ -15,6 +15,9 @@ const els = {
   instruction: document.getElementById('instruction'),
   hint: document.getElementById('hint'),
   steps: document.getElementById('steps'),
+  pass: document.getElementById('pass'),
+  passTitle: document.getElementById('passTitle'),
+  passNext: document.getElementById('passNext'),
   start: document.getElementById('start'),
   stop: document.getElementById('stop'),
   status: document.getElementById('status'),
@@ -45,6 +48,14 @@ const FRAME_INTERVAL_MS = 160;
 // instruction anyway.
 const SETTLE_MS = 400;
 
+// How long the "step passed" confirmation stays up.
+//
+// Kept short because it is not free. The server starts the next challenge's
+// clock the moment the satisfying frame is accepted, so every millisecond spent
+// celebrating comes out of the next step's budget. Long enough to register,
+// short enough that the countdown underneath it is still worth having.
+const PASS_MS = 1000;
+
 // The countdown redraws far more often than frames arrive, so the number moves
 // smoothly instead of stepping six times a second.
 const TICK_MS = 100;
@@ -61,6 +72,7 @@ const state = {
   inFlight: false,
   currentChallenge: null,
   settleUntil: 0,
+  passTimer: null,
   done: new Set(),
 
   // The countdown is interpolated between server responses. Storing when the
@@ -162,6 +174,36 @@ function showChallenge(kind, seconds) {
   drawCountdown();
 }
 
+// showPass confirms a completed step and previews the next one.
+//
+// Frames are paused while it is up, by pushing the settle deadline out past it.
+// That is not only cosmetic: the turn and nod challenges take their baseline
+// from the first frame they see, so a frame captured while the subject is still
+// reacting to the previous step would become the pose everything is measured
+// against.
+function showPass(finished, next) {
+  const done = INSTRUCTIONS[finished];
+  const upcoming = INSTRUCTIONS[next];
+
+  els.passTitle.textContent = done ? `${done.text} — berhasil` : 'Langkah berhasil';
+  els.passNext.textContent = upcoming ? `Berikutnya: ${upcoming.text}` : '';
+  els.pass.hidden = false;
+
+  // Frames resume after the popup, then after the usual settle.
+  state.settleUntil = performance.now() + PASS_MS + SETTLE_MS;
+
+  if (state.passTimer) clearTimeout(state.passTimer);
+  state.passTimer = setTimeout(() => {
+    els.pass.hidden = true;
+    state.passTimer = null;
+  }, PASS_MS);
+}
+
+function hidePass() {
+  if (state.passTimer) { clearTimeout(state.passTimer); state.passTimer = null; }
+  els.pass.hidden = true;
+}
+
 // api calls the service.
 //
 // No API key anywhere in this file, deliberately. A key is an operator's
@@ -233,25 +275,40 @@ async function sendFrame() {
     });
 
     if (res.completed) {
+      // The last step earns the same confirmation as the others; the verdict
+      // badge that follows says the session as a whole passed, which is a
+      // different statement.
+      showPass(state.currentChallenge, null);
       await finish();
       return;
     }
 
+    // Captured before showChallenge, which is what rotates currentChallenge on
+    // to the next one.
+    const finished = res.advanced ? state.currentChallenge : null;
+
     if (res.challenge) showChallenge(res.challenge, res.seconds_remaining);
     else syncCountdown(res.seconds_remaining);
 
-    if (res.advanced) setStatus('Bagus.', 'ok');
-    else if (res.reason) setStatus(res.reason);
-    else setStatus('');
+    if (res.advanced) {
+      showPass(finished, res.challenge);
+      setStatus('Bagus.', 'ok');
+    } else if (res.reason) {
+      setStatus(res.reason);
+    } else {
+      setStatus('');
+    }
   } catch (err) {
     // 410 is a deadline that ran out; 422 is a verification failure.
     if (err.status === 410) {
+      hidePass();
       stop();
       setBadge('WAKTU HABIS', 'bad');
       setStatus('Waktu untuk langkah ini habis. Mulai lagi dari awal.', 'bad');
       return;
     }
     if (err.status === 422) {
+      hidePass();
       stop();
       setBadge('GAGAL', 'bad');
       setStatus(err.message, 'bad');
@@ -308,6 +365,7 @@ function stop() {
 
 async function start() {
   setBadge(null);
+  hidePass();
   setStatus('Meminta akses kamera…');
   els.start.disabled = true;
 
