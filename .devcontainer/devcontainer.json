@@ -1,0 +1,69 @@
+// Membuka workspace ini di dalam container `dev` yang sudah ada.
+//
+// Ini bukan kenyamanan, melainkan syarat supaya editor bisa membaca kodenya.
+// Paket internal/biometric/onnx mengimpor github.com/yalue/onnxruntime_go, dan
+// setiap file di binding itu dijaga build constraint `cgo`. Di Windows tanpa
+// kompiler C, CGO_ENABLED jatuh ke 0, seluruh file binding dikecualikan, dan
+// gopls melaporkan setiap acuan ort.* sebagai tidak dikenal — di kesebelas file
+// yang mengimpornya, bukan cuma satu yang kebetulan sedang dibuka.
+//
+// Kodenya sendiri tidak salah: di container yang sama ia build, vet (termasuk
+// tag models dan integration), dan lint dengan bersih. Yang kurang hanya
+// toolchain, dan container inilah yang sudah memilikinya: CGO_ENABLED=1, gcc,
+// serta libonnxruntime.so terpasang dan ter-ldconfig.
+//
+// Alternatifnya memasang mingw-w64 di Windows lalu `go env -w CGO_ENABLED=1`.
+// Itu juga berhasil, tapi menambah satu toolchain yang harus dijaga tetap
+// cocok dengan yang dipakai container saat build.
+{
+  "name": "Liveness Verifier",
+
+  "dockerComposeFile": ["../compose.yaml"],
+  "service": "dev",
+  "workspaceFolder": "/src",
+
+  // Service dev ada di profile "tools" supaya tidak ikut naik saat
+  // `docker compose up`. Menyebutnya eksplisit di sini mengaktifkan profile
+  // itu, jadi tidak perlu diubah.
+  //
+  // Postgres ikut dinyalakan karena test integrasi membutuhkannya; MinIO
+  // menyusul saat Milestone B memakainya.
+  "runServices": ["postgres"],
+
+  // Perintah bawaan image dev adalah `go test ./... -race`, yang akan langsung
+  // keluar dan mematikan containernya.
+  "overrideCommand": true,
+
+  // Container dev dipakai bersama oleh `docker compose run`; jangan dihapus
+  // hanya karena jendela editor ditutup.
+  "shutdownAction": "none",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go"],
+      "settings": {
+        "go.goroot": "/usr/local/go",
+        "go.gopath": "/go",
+
+        // Tool sudah terpasang di image pada versi yang dipakai gerbang
+        // kualitas. Membiarkan editor memperbaruinya sendiri berarti lint di
+        // editor dan lint di CI perlahan berbeda pendapat.
+        "go.toolsManagement.checkForUpdates": "off",
+        "go.lintTool": "golangci-lint",
+        "go.formatTool": "custom",
+        "go.alternateTools": { "customFormatter": "gofumpt" },
+
+        // Tanpa ini gopls tetap menganalisis dengan cgo mati dan mengulang
+        // persoalan yang sama di dalam container.
+        "gopls": {
+          "build.env": { "CGO_ENABLED": "1" },
+
+          // File di bawah tag ini tidak terlihat oleh editor kalau tidak
+          // disebut, sehingga test model dan integrasi tampak seperti kode
+          // mati dan kesalahannya baru muncul di gerbang kualitas.
+          "build.buildFlags": ["-tags=models,integration"]
+        }
+      }
+    }
+  }
+}

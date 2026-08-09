@@ -37,6 +37,22 @@ Cek versi:
 docker compose version
 ```
 
+### Editor
+
+Buka repo ini **di dalam container**, lewat Dev Containers: di VS Code jalankan
+*Dev Containers: Reopen in Container*. Konfigurasinya sudah ada di
+[.devcontainer/devcontainer.json](.devcontainer/devcontainer.json).
+
+Ini bukan soal selera. Binding ONNX Runtime dijaga build constraint `cgo`, dan
+di Windows tanpa kompiler C `CGO_ENABLED` jatuh ke 0 — seluruh file binding
+dikecualikan, lalu editor menandai setiap acuan `ort.*` di kesebelas file
+`internal/biometric/onnx/` sebagai kesalahan yang sebenarnya tidak ada. Di
+dalam container semuanya build, vet, dan lint dengan bersih.
+
+Kalau lebih suka tetap di host: pasang mingw-w64, lalu `go env -w
+CGO_ENABLED=1`. Itu juga berhasil, dengan konsekuensi ada satu toolchain lagi
+yang harus dijaga cocok dengan milik container.
+
 ## Menjalankan
 
 **1. Buat konfigurasi**
