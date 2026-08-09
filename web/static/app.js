@@ -16,8 +16,10 @@ const els = {
   hint: document.getElementById('hint'),
   steps: document.getElementById('steps'),
   pass: document.getElementById('pass'),
+  passMark: document.getElementById('passMark'),
   passTitle: document.getElementById('passTitle'),
   passNext: document.getElementById('passNext'),
+  passAction: document.getElementById('passAction'),
   start: document.getElementById('start'),
   stop: document.getElementById('stop'),
   status: document.getElementById('status'),
@@ -185,8 +187,11 @@ function showPass(finished, next) {
   const done = INSTRUCTIONS[finished];
   const upcoming = INSTRUCTIONS[next];
 
+  els.pass.classList.remove('bad');
+  els.passMark.textContent = '✓';
   els.passTitle.textContent = done ? `${done.text} — berhasil` : 'Langkah berhasil';
-  els.passNext.textContent = upcoming ? `Berikutnya: ${upcoming.text}` : '';
+  els.passNext.textContent = upcoming ? `Berikutnya: ${upcoming.text}` : 'Menyelesaikan verifikasi…';
+  els.passAction.hidden = true;
   els.pass.hidden = false;
 
   // Frames resume after the popup, then after the usual settle.
@@ -199,9 +204,39 @@ function showPass(finished, next) {
   }, PASS_MS);
 }
 
+// showResult ends the session on screen and waits to be acknowledged.
+//
+// Unlike the between-steps confirmation it does not dismiss itself: the session
+// is over either way, so there is no clock left to spend, and a verdict that
+// vanishes before it is read is how this ended up as a line of small red text
+// in the side panel in the first place.
+function showResult(ok, title, detail, actionLabel) {
+  if (state.passTimer) { clearTimeout(state.passTimer); state.passTimer = null; }
+
+  els.pass.classList.toggle('bad', !ok);
+  els.passMark.textContent = ok ? '✓' : '✕';
+  els.passTitle.textContent = title;
+  els.passNext.textContent = detail;
+  els.passAction.textContent = actionLabel;
+  els.passAction.hidden = false;
+  els.pass.hidden = false;
+}
+
+function showFail(title, detail) {
+  showResult(false, title, detail, 'Ulangi dari awal');
+}
+
 function hidePass() {
   if (state.passTimer) { clearTimeout(state.passTimer); state.passTimer = null; }
   els.pass.hidden = true;
+  els.pass.classList.remove('bad');
+  els.passAction.hidden = true;
+}
+
+// currentInstruction names the step the subject was on, for a failure message
+// that says which one rather than only that something went wrong.
+function currentInstruction() {
+  return INSTRUCTIONS[state.currentChallenge]?.text || 'Langkah ini';
 }
 
 // api calls the service.
@@ -301,15 +336,17 @@ async function sendFrame() {
   } catch (err) {
     // 410 is a deadline that ran out; 422 is a verification failure.
     if (err.status === 410) {
-      hidePass();
       stop();
+      showFail(`${currentInstruction()} — belum selesai`,
+        'Waktu untuk langkah ini habis, jadi seluruh sesi harus diulang dari awal.');
       setBadge('WAKTU HABIS', 'bad');
       setStatus('Waktu untuk langkah ini habis. Mulai lagi dari awal.', 'bad');
       return;
     }
     if (err.status === 422) {
-      hidePass();
       stop();
+      showFail('Verifikasi gagal',
+        'Sesi ini dihentikan dan harus diulang dari awal.');
       setBadge('GAGAL', 'bad');
       setStatus(err.message, 'bad');
       return;
@@ -329,16 +366,21 @@ async function finish() {
   try {
     const verdict = await api(`/v1/liveness/sessions/${state.session.session_id}/complete`, { method: 'POST' });
     if (verdict.passed) {
-      setBadge('LOLOS', 'ok');
-      setStatus('Verifikasi berhasil.', 'ok');
       state.done = new Set(state.session.challenges);
       state.currentChallenge = null;
       renderSteps();
+
+      showResult(true, 'Verifikasi berhasil',
+        'Semua langkah selesai. Anda terverifikasi sebagai orang sungguhan.', 'Mulai lagi');
+      setBadge('LOLOS', 'ok');
+      setStatus('Verifikasi berhasil.', 'ok');
     } else {
+      showFail('Verifikasi gagal', `Sesi berakhir dengan status ${verdict.state}.`);
       setBadge('GAGAL', 'bad');
       setStatus(`Sesi berakhir dengan status ${verdict.state}.`, 'bad');
     }
   } catch (err) {
+    showFail('Verifikasi gagal', err.message);
     setBadge('GAGAL', 'bad');
     setStatus(err.message, 'bad');
   }
@@ -424,9 +466,18 @@ async function start() {
 
 els.start.addEventListener('click', start);
 els.stop.addEventListener('click', () => {
+  hidePass();
   stop();
   setStatus('Dibatalkan.');
   setBadge(null);
+});
+
+// The verdict overlay covers the whole viewport, so its button is the only way
+// out of it. It restarts rather than merely dismissing: after a verdict there is
+// nothing behind the overlay to go back to.
+els.passAction.addEventListener('click', () => {
+  hidePass();
+  start();
 });
 
 // A quick honesty check on load: tell the operator whether the models are

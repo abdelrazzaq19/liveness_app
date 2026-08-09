@@ -36,9 +36,10 @@
            aria-live so it is announced rather than only seen: the subject is
            looking at the camera, not reading the panel. -->
       <div id="pass" class="pass" hidden role="status" aria-live="polite">
-        <div class="pass-mark" aria-hidden="true">✓</div>
+        <div id="passMark" class="pass-mark" aria-hidden="true">✓</div>
         <p id="passTitle" class="pass-title"></p>
         <p id="passNext" class="pass-next"></p>
+        <button id="passAction" class="pass-action" type="button" hidden></button>
       </div>
     </div>
 
