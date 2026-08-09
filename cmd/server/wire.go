@@ -70,12 +70,12 @@ func build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*app, err
 		Sessions: sessions,
 		Analyzer: analyzer,
 		Evaluator: liveness.Evaluator{Thresholds: liveness.Thresholds{
-			EARBlink:       cfg.Liveness.EARBlink,
-			EAROpen:        cfg.Liveness.EAROpen,
-			BlinkMinFrames: cfg.Liveness.BlinkMinFrames,
-			YawTurnDeg:     cfg.Liveness.YawTurnDeg,
-			PitchNodDeg:    cfg.Liveness.PitchNodDeg,
-			MARMouthOpen:   cfg.Liveness.MARMouthOpen,
+			BlinkCloseRatio: cfg.Liveness.BlinkCloseRatio,
+			BlinkOpenRatio:  cfg.Liveness.BlinkOpenRatio,
+			BlinkMinFrames:  cfg.Liveness.BlinkMinFrames,
+			YawTurnDeg:      cfg.Liveness.YawTurnDeg,
+			PitchNodDeg:     cfg.Liveness.PitchNodDeg,
+			MARMouthOpen:    cfg.Liveness.MARMouthOpen,
 		}},
 		Guard: liveness.Guard{
 			MinLivenessScore:  cfg.Liveness.MinScore,

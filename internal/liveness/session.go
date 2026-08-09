@@ -88,6 +88,13 @@ type Progress struct {
 	// that reopening them completes the blink rather than starting one.
 	SawClose bool `json:"saw_close"`
 
+	// PeakEAR is the widest the eyes have been seen during this challenge.
+	//
+	// A blink is judged against it rather than against a fixed number, because
+	// the eye aspect ratio this landmark model produces is on a different scale
+	// from the published figures and differs between people besides.
+	PeakEAR float64 `json:"peak_ear"`
+
 	// BaselineYaw and BaselinePitch are the head angles when the challenge
 	// began, so a turn is measured as a movement rather than as an absolute
 	// pose. A subject who is simply sitting at an angle should still have to

@@ -63,7 +63,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		{"Liveness.SessionTTL", cfg.Liveness.SessionTTL, 90 * time.Second},
 		{"Liveness.ChallengeTimeout", cfg.Liveness.ChallengeTimeout, 5 * time.Second},
 		{"Liveness.ChallengeCount", cfg.Liveness.ChallengeCount, 3},
-		{"Liveness.EARBlink", cfg.Liveness.EARBlink, 0.21},
+		{"Liveness.BlinkCloseRatio", cfg.Liveness.BlinkCloseRatio, 0.60},
+		{"Liveness.BlinkOpenRatio", cfg.Liveness.BlinkOpenRatio, 0.85},
 		{"Liveness.IdentityCosineMin", cfg.Liveness.IdentityCosineMin, 0.70},
 		{"Enrollment.MatchCosineMin", cfg.Enrollment.MatchCosineMin, 0.42},
 		{"Enrollment.HNSWM", cfg.Enrollment.HNSWM, 16},
@@ -110,7 +111,7 @@ func TestLoadOverridesDefaults(t *testing.T) {
 		"LV_LOG_LEVEL":                  "debug",
 		"LV_PIPELINE_MODE":              "onnx",
 		"LV_LIVENESS_SESSION_TTL":       "120s",
-		"LV_LIVENESS_EAR_BLINK":         "0.18",
+		"LV_LIVENESS_BLINK_CLOSE_RATIO": "0.50",
 		"LV_ENROLL_MATCH_COSINE_MIN":    "0.5",
 		"LV_IMG_MIN_LAPLACIAN_VARIANCE": "120.5",
 	}))
@@ -130,8 +131,8 @@ func TestLoadOverridesDefaults(t *testing.T) {
 	if cfg.Liveness.SessionTTL != 120*time.Second {
 		t.Errorf("Liveness.SessionTTL = %v, want %v", cfg.Liveness.SessionTTL, 120*time.Second)
 	}
-	if cfg.Liveness.EARBlink != 0.18 {
-		t.Errorf("Liveness.EARBlink = %v, want %v", cfg.Liveness.EARBlink, 0.18)
+	if cfg.Liveness.BlinkCloseRatio != 0.50 {
+		t.Errorf("Liveness.BlinkCloseRatio = %v, want %v", cfg.Liveness.BlinkCloseRatio, 0.50)
 	}
 	if cfg.Enrollment.MatchCosineMin != 0.5 {
 		t.Errorf("Enrollment.MatchCosineMin = %v, want %v", cfg.Enrollment.MatchCosineMin, 0.5)
@@ -243,10 +244,10 @@ func TestCrossValidation(t *testing.T) {
 		{
 			name: "blink threshold not below open threshold",
 			override: map[string]string{
-				"LV_LIVENESS_EAR_BLINK": "0.35",
-				"LV_LIVENESS_EAR_OPEN":  "0.30",
+				"LV_LIVENESS_BLINK_CLOSE_RATIO": "0.90",
+				"LV_LIVENESS_BLINK_OPEN_RATIO":  "0.50",
 			},
-			wantHint: "LV_LIVENESS_EAR_BLINK",
+			wantHint: "LV_LIVENESS_BLINK_CLOSE_RATIO",
 		},
 		{
 			name: "min brightness not below max brightness",

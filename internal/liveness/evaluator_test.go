@@ -10,12 +10,12 @@ import (
 
 func testThresholds() Thresholds {
 	return Thresholds{
-		EARBlink:       0.21,
-		EAROpen:        0.30,
-		BlinkMinFrames: 2,
-		YawTurnDeg:     25,
-		PitchNodDeg:    15,
-		MARMouthOpen:   0.55,
+		BlinkCloseRatio: 0.60,
+		BlinkOpenRatio:  0.85,
+		BlinkMinFrames:  2,
+		YawTurnDeg:      25,
+		PitchNodDeg:     15,
+		MARMouthOpen:    0.55,
 	}
 }
 
@@ -65,9 +65,9 @@ func TestThresholdsValidation(t *testing.T) {
 		wantHint string
 	}{
 		{"valid", func(*Thresholds) {}, ""},
-		{"blink threshold out of range", func(t *Thresholds) { t.EARBlink = 1.5 }, "EARBlink"},
-		{"open below blink", func(t *Thresholds) { t.EAROpen = 0.1 }, "EAROpen"},
-		{"open equal to blink", func(t *Thresholds) { t.EAROpen = t.EARBlink }, "EAROpen"},
+		{"close ratio out of range", func(t *Thresholds) { t.BlinkCloseRatio = 1.5 }, "BlinkCloseRatio"},
+		{"open ratio below close", func(t *Thresholds) { t.BlinkOpenRatio = 0.1 }, "BlinkOpenRatio"},
+		{"open ratio equal to close", func(t *Thresholds) { t.BlinkOpenRatio = t.BlinkCloseRatio }, "BlinkOpenRatio"},
 		{"zero blink frames", func(t *Thresholds) { t.BlinkMinFrames = 0 }, "BlinkMinFrames"},
 		{"negative yaw", func(t *Thresholds) { t.YawTurnDeg = -5 }, "YawTurnDeg"},
 		{"zero pitch", func(t *Thresholds) { t.PitchNodDeg = 0 }, "PitchNodDeg"},
@@ -166,18 +166,92 @@ func TestBlinkCounterResetsWhenTheEyesOpen(t *testing.T) {
 	e := Evaluator{Thresholds: testThresholds()}
 	s := sessionFor(t, ChallengeBlink)
 
-	e.Evaluate(s, frame(0.15, 0, 0, 0)) // shut 1
+	// The eyes have to be seen open before a blink means anything: the widest
+	// opening observed is what the drop is measured against. Values are the ones
+	// this pipeline actually produces, not the published 68-point figures.
+	e.Evaluate(s, frame(0.28, 0, 0, 0)) // open, establishes the reference
+
+	e.Evaluate(s, frame(0.08, 0, 0, 0)) // shut 1
 	if s.Progress.ClosedFrames != 1 {
 		t.Fatalf("closed frames = %d, want 1", s.Progress.ClosedFrames)
 	}
 
-	e.Evaluate(s, frame(0.40, 0, 0, 0)) // open, below the minimum
+	e.Evaluate(s, frame(0.27, 0, 0, 0)) // open again, below the minimum
 	if s.Progress.ClosedFrames != 0 {
 		t.Errorf("closed frames = %d after the eyes reopened, want 0", s.Progress.ClosedFrames)
 	}
 	if s.Progress.SawClose {
 		t.Error("a single shut frame set SawClose")
 	}
+}
+
+// The values here are the ones this pipeline produced on a real session: eye
+// aspect ratios between 0.030 and 0.300, mean 0.124, against published 68-point
+// figures of 0.21 shut and 0.30 open.
+//
+// Under those absolute thresholds not one of 34 frames could register as open,
+// so the challenge could never be completed however hard the subject blinked.
+// This is the test that would have caught it.
+func TestABlinkIsMeasuredAgainstTheSubjectsOwnEyes(t *testing.T) {
+	e := Evaluator{Thresholds: testThresholds()}
+
+	// A subject whose eyes never come near the published "open" figure.
+	t.Run("narrow eyes still complete a blink", func(t *testing.T) {
+		s := sessionFor(t, ChallengeBlink)
+
+		for _, ear := range []float64{0.26, 0.28, 0.27} { // open, well below 0.30
+			if out := e.Evaluate(s, frame(ear, 0, 0, 0)); out.Satisfied {
+				t.Fatalf("EAR %.2f satisfied the blink before the eyes ever shut", ear)
+			}
+		}
+		for _, ear := range []float64{0.09, 0.06} { // shut
+			e.Evaluate(s, frame(ear, 0, 0, 0))
+		}
+		if !s.Progress.SawClose {
+			t.Fatalf("eyes at 0.06 against a peak of 0.28 did not register as shut")
+		}
+
+		if out := e.Evaluate(s, frame(0.27, 0, 0, 0)); !out.Satisfied {
+			t.Errorf("reopening to 0.27 did not complete the blink: %+v", out)
+		}
+	})
+
+	// The same movement on a subject whose eyes read wider, to show the
+	// reference travels with the person rather than with the scale.
+	t.Run("wide eyes need a proportionally larger drop", func(t *testing.T) {
+		s := sessionFor(t, ChallengeBlink)
+
+		e.Evaluate(s, frame(0.60, 0, 0, 0)) // open
+		// 0.40 would be shut for the narrow-eyed subject above; here it is not
+		// even below the open ratio.
+		e.Evaluate(s, frame(0.55, 0, 0, 0))
+		if s.Progress.ClosedFrames != 0 {
+			t.Errorf("0.55 against a peak of 0.60 counted as shut")
+		}
+
+		for _, ear := range []float64{0.20, 0.15} {
+			e.Evaluate(s, frame(ear, 0, 0, 0))
+		}
+		if out := e.Evaluate(s, frame(0.58, 0, 0, 0)); !out.Satisfied {
+			t.Errorf("a proportionally equal blink did not complete: %+v", out)
+		}
+	})
+
+	// A subject who arrives mid-blink must not anchor the whole challenge to
+	// their shut eyes, which a first-frame baseline would do.
+	t.Run("arriving with the eyes already shut", func(t *testing.T) {
+		s := sessionFor(t, ChallengeBlink)
+
+		e.Evaluate(s, frame(0.05, 0, 0, 0)) // shut on arrival
+		e.Evaluate(s, frame(0.28, 0, 0, 0)) // opens; the reference moves up
+		for _, ear := range []float64{0.08, 0.07} {
+			e.Evaluate(s, frame(ear, 0, 0, 0))
+		}
+
+		if out := e.Evaluate(s, frame(0.27, 0, 0, 0)); !out.Satisfied {
+			t.Errorf("a subject who arrived mid-blink could not complete one: %+v", out)
+		}
+	})
 }
 
 // A turn is a movement, not a pose: a subject already sitting at an angle must

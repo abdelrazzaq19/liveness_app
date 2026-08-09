@@ -181,9 +181,11 @@ type Liveness struct {
 	// name for why it is switchable at all.
 	EnforceAntiSpoof bool
 
-	EARBlink       float64 // Eye aspect ratio below this counts as closed.
-	EAROpen        float64 // Eye aspect ratio above this counts as open again.
-	BlinkMinFrames int
+	// BlinkCloseRatio and BlinkOpenRatio are fractions of the subject own
+	// widest observed eye opening, not absolute eye aspect ratios.
+	BlinkCloseRatio float64
+	BlinkOpenRatio  float64
+	BlinkMinFrames  int
 
 	YawTurnDeg   float64
 	PitchNodDeg  float64
@@ -279,13 +281,16 @@ func load(getenv func(string) string) (*Config, error) {
 			MinDetectionScore:   l.float("LV_LIVENESS_MIN_DETECTION_SCORE", 0.60, 0, 1),
 			MinScore:            l.float("LV_LIVENESS_MIN_SCORE", 0.80, 0, 1),
 			EnforceAntiSpoof:    l.boolean("LV_LIVENESS_ANTISPOOF_ENFORCE", true),
-			EARBlink:            l.float("LV_LIVENESS_EAR_BLINK", 0.21, 0, 1),
-			EAROpen:             l.float("LV_LIVENESS_EAR_OPEN", 0.30, 0, 1),
+			BlinkCloseRatio:     l.float("LV_LIVENESS_BLINK_CLOSE_RATIO", 0.60, 0.05, 0.95),
+			BlinkOpenRatio:      l.float("LV_LIVENESS_BLINK_OPEN_RATIO", 0.85, 0.10, 1.0),
 			BlinkMinFrames:      l.intRange("LV_LIVENESS_BLINK_MIN_FRAMES", 2, 1, 30),
-			YawTurnDeg:          l.float("LV_LIVENESS_YAW_TURN_DEG", 25, 5, 89),
-			PitchNodDeg:         l.float("LV_LIVENESS_PITCH_NOD_DEG", 15, 5, 89),
-			MARMouthOpen:        l.float("LV_LIVENESS_MAR_MOUTH_OPEN", 0.55, 0, 5),
-			IdentityCosineMin:   l.float("LV_LIVENESS_IDENTITY_COSINE_MIN", 0.70, 0, 1),
+			// 15 rather than 25: a subject plainly turning their head produced a
+			// yaw of at most 22 degrees on a real session, so 25 was all but
+			// unreachable.
+			YawTurnDeg:        l.float("LV_LIVENESS_YAW_TURN_DEG", 15, 5, 89),
+			PitchNodDeg:       l.float("LV_LIVENESS_PITCH_NOD_DEG", 15, 5, 89),
+			MARMouthOpen:      l.float("LV_LIVENESS_MAR_MOUTH_OPEN", 0.55, 0, 5),
+			IdentityCosineMin: l.float("LV_LIVENESS_IDENTITY_COSINE_MIN", 0.70, 0, 1),
 		},
 		Enrollment: Enrollment{
 			MatchCosineMin:     l.float("LV_ENROLL_MATCH_COSINE_MIN", 0.42, 0, 1),
@@ -335,10 +340,10 @@ func (l *loader) crossValidate(c *Config) {
 	}
 
 	// Blink detection needs hysteresis: a single threshold would flap.
-	if c.Liveness.EARBlink >= c.Liveness.EAROpen {
+	if c.Liveness.BlinkCloseRatio >= c.Liveness.BlinkOpenRatio {
 		l.errs = append(l.errs, fmt.Errorf(
-			"LV_LIVENESS_EAR_BLINK (%.3f) must be lower than LV_LIVENESS_EAR_OPEN (%.3f)",
-			c.Liveness.EARBlink, c.Liveness.EAROpen))
+			"LV_LIVENESS_BLINK_CLOSE_RATIO (%.3f) must be lower than LV_LIVENESS_BLINK_OPEN_RATIO (%.3f)",
+			c.Liveness.BlinkCloseRatio, c.Liveness.BlinkOpenRatio))
 	}
 
 	if c.Imaging.MinBrightness >= c.Imaging.MaxBrightness {

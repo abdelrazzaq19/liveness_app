@@ -229,7 +229,7 @@ func TestNewServiceRequiresItsDependencies(t *testing.T) {
 		{"no id generator", func(d *Deps) { d.IDs = nil }},
 		{"no logger", func(d *Deps) { d.Logger = nil }},
 		{"bad config", func(d *Deps) { d.Config.TTL = 0 }},
-		{"bad thresholds", func(d *Deps) { d.Evaluator.Thresholds.EAROpen = 0 }},
+		{"bad thresholds", func(d *Deps) { d.Evaluator.Thresholds.BlinkOpenRatio = 0 }},
 		{"bad guard", func(d *Deps) { d.Guard.MaxDuplicateStreak = 0 }},
 	}
 
@@ -770,19 +770,30 @@ func TestHoldingAPoseStillSatisfiesTheChallenge(t *testing.T) {
 
 	// Now the blink challenge, held the same way: eyes shut for several
 	// identical frames, then open.
-	h.analyzer.faces = []biometric.Face{{EAR: 0.10, LivenessScore: 0.95}}
+	//
+	// The open frame comes first, because a blink is measured as a drop from
+	// the widest opening seen rather than against a fixed number. The values are
+	// the ones this pipeline really produces: the published 68-point figures are
+	// on a different scale entirely.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.28, LivenessScore: 0.95}}
+	h.analyzer.calls = 0
+	if _, err := h.sendFrame(t, s.ID, 2, s.Nonce, held); err != nil {
+		t.Fatalf("SubmitFrame() establishing the open-eye reference: %v", err)
+	}
+
+	h.analyzer.faces = []biometric.Face{{EAR: 0.08, LivenessScore: 0.95}}
 	h.analyzer.calls = 0
 
-	for seq := int64(2); seq <= 4; seq++ {
+	for seq := int64(3); seq <= 5; seq++ {
 		if _, err := h.sendFrame(t, s.ID, seq, s.Nonce, held); err != nil {
 			t.Fatalf("SubmitFrame() seq %d returned an unexpected error: %v", seq, err)
 		}
 	}
 
-	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+	h.analyzer.faces = []biometric.Face{{EAR: 0.27, LivenessScore: 0.95}}
 	h.analyzer.calls = 0
 
-	got, err := h.sendFrame(t, s.ID, 5, s.Nonce, held)
+	got, err := h.sendFrame(t, s.ID, 6, s.Nonce, held)
 	if err != nil {
 		t.Fatalf("SubmitFrame() returned an unexpected error: %v", err)
 	}
@@ -895,9 +906,15 @@ func TestARetryStartsTheStepFromNothing(t *testing.T) {
 	stored.Current = 0
 	_ = h.repo.Update(context.Background(), stored)
 
-	// Eyes shut for long enough to count.
-	h.analyzer.faces = []biometric.Face{{EAR: 0.10, LivenessScore: 0.95}}
-	for seq := int64(1); seq <= 3; seq++ {
+	// Eyes open first, so the blink has a reference to be a drop from, then
+	// shut for long enough to count.
+	h.analyzer.faces = []biometric.Face{{EAR: 0.28, LivenessScore: 0.95}}
+	if _, err := h.sendFrame(t, s.ID, 1, s.Nonce, 0x1111_1111_1111_1111); err != nil {
+		t.Fatalf("SubmitFrame() establishing the open-eye reference: %v", err)
+	}
+
+	h.analyzer.faces = []biometric.Face{{EAR: 0.08, LivenessScore: 0.95}}
+	for seq := int64(2); seq <= 4; seq++ {
 		if _, err := h.sendFrame(t, s.ID, seq, s.Nonce, uint64(seq)*0x1111_1111_1111_1111); err != nil {
 			t.Fatalf("SubmitFrame() seq %d: %v", seq, err)
 		}
@@ -910,9 +927,9 @@ func TestARetryStartsTheStepFromNothing(t *testing.T) {
 
 	// Time runs out, then the eyes open on the new attempt.
 	h.clock.Advance(21 * time.Second)
-	h.analyzer.faces = []biometric.Face{{EAR: 0.45, LivenessScore: 0.95}}
+	h.analyzer.faces = []biometric.Face{{EAR: 0.27, LivenessScore: 0.95}}
 
-	if _, err := h.sendFrame(t, s.ID, 4, s.Nonce, 0xAAAA_BBBB_CCCC_DDDD); err != nil {
+	if _, err := h.sendFrame(t, s.ID, 5, s.Nonce, 0xAAAA_BBBB_CCCC_DDDD); err != nil {
 		t.Fatalf("SubmitFrame() at the retry: %v", err)
 	}
 
@@ -922,7 +939,7 @@ func TestARetryStartsTheStepFromNothing(t *testing.T) {
 	}
 
 	// Opening the eyes now must not complete a blink that never happened.
-	got, err := h.sendFrame(t, s.ID, 5, s.Nonce, 0xEEEE_FFFF_0000_1111)
+	got, err := h.sendFrame(t, s.ID, 6, s.Nonce, 0xEEEE_FFFF_0000_1111)
 	if err != nil {
 		t.Fatalf("SubmitFrame() after the retry: %v", err)
 	}

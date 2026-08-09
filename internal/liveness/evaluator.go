@@ -16,13 +16,23 @@ import (
 // against a 0.55 "open" threshold. Until the calibration harness produces
 // measured values, a challenge decision built on these is provisional.
 type Thresholds struct {
-	// EARBlink is the eye aspect ratio below which the eyes count as shut.
-	EARBlink float64
-
-	// EAROpen is the ratio above which they count as open again. It sits above
-	// EARBlink deliberately: with a single threshold a ratio hovering at the
-	// boundary would register a burst of blinks.
-	EAROpen float64
+	// BlinkCloseRatio and BlinkOpenRatio are fractions of the subject's own
+	// widest observed eye opening, not absolute ratios.
+	//
+	// Absolute thresholds were tried first and were provably unsatisfiable. On
+	// a real session this pipeline produced eye aspect ratios between 0.030 and
+	// 0.300 with a mean of 0.124, against literature figures of 0.21 for shut
+	// and 0.30 for open — 0 frames out of 34 could ever register as open, so no
+	// amount of blinking could complete the challenge.
+	//
+	// The literature values are for a 68-point landmark scheme; this model
+	// emits 106 and puts its eye points elsewhere, so the ratio it produces is
+	// on a different scale entirely. Measuring against the subject's own
+	// baseline sidesteps both that and the fact that eyes differ between
+	// people. It is the same reasoning already applied to head turns, which are
+	// measured as movement rather than as an absolute angle.
+	BlinkCloseRatio float64
+	BlinkOpenRatio  float64
 
 	// BlinkMinFrames is how many consecutive shut frames a blink needs, which
 	// is what separates a blink from one noisy landmark reading.
@@ -39,12 +49,13 @@ type Thresholds struct {
 // Validate reports thresholds that cannot work.
 func (t Thresholds) Validate() error {
 	var problems []error
-	if t.EARBlink <= 0 || t.EARBlink >= 1 {
-		problems = append(problems, fmt.Errorf("EARBlink must be in (0,1), got %g", t.EARBlink))
+	if t.BlinkCloseRatio <= 0 || t.BlinkCloseRatio >= 1 {
+		problems = append(problems, fmt.Errorf("BlinkCloseRatio must be in (0,1), got %g", t.BlinkCloseRatio))
 	}
-	if t.EAROpen <= t.EARBlink {
-		problems = append(problems, fmt.Errorf("EAROpen (%g) must exceed EARBlink (%g), or blink detection flaps",
-			t.EAROpen, t.EARBlink))
+	if t.BlinkOpenRatio <= t.BlinkCloseRatio || t.BlinkOpenRatio > 1 {
+		problems = append(problems, fmt.Errorf(
+			"BlinkOpenRatio (%g) must be above BlinkCloseRatio (%g) and at most 1, or blink detection flaps",
+			t.BlinkOpenRatio, t.BlinkCloseRatio))
 	}
 	if t.BlinkMinFrames < 1 {
 		problems = append(problems, fmt.Errorf("BlinkMinFrames must be at least 1, got %d", t.BlinkMinFrames))
@@ -110,15 +121,29 @@ func (e Evaluator) Evaluate(s *Session, face biometric.Face) Outcome {
 // eyes shut satisfies the challenge, and so does a photograph of someone with
 // their eyes closed.
 func (e Evaluator) blink(s *Session, face biometric.Face) Outcome {
+	// The widest the eyes have been seen is the reference. A running maximum
+	// rather than the first frame's value, because a subject who arrives
+	// mid-blink would otherwise anchor the whole challenge to their shut eyes
+	// and never be able to satisfy it.
+	if face.EAR > s.Progress.PeakEAR {
+		s.Progress.PeakEAR = face.EAR
+	}
+	if s.Progress.PeakEAR <= 0 {
+		return Outcome{Reason: "blink"}
+	}
+
+	shut := s.Progress.PeakEAR * e.Thresholds.BlinkCloseRatio
+	open := s.Progress.PeakEAR * e.Thresholds.BlinkOpenRatio
+
 	switch {
-	case face.EAR < e.Thresholds.EARBlink:
+	case face.EAR < shut:
 		s.Progress.ClosedFrames++
 		if s.Progress.ClosedFrames >= e.Thresholds.BlinkMinFrames {
 			s.Progress.SawClose = true
 		}
 		return Outcome{Reason: "keep going, now open your eyes"}
 
-	case face.EAR > e.Thresholds.EAROpen:
+	case face.EAR > open:
 		if s.Progress.SawClose {
 			return Outcome{Satisfied: true}
 		}
