@@ -5,6 +5,7 @@ Service Go tunggal untuk **verifikasi liveness aktif** (challenge-response) dan
 Tanpa panggilan ke layanan cloud mana pun.
 
 - Kontrak API: [docs/API.md](docs/API.md)
+- Struktur project: [docs/STRUCTURE.md](docs/STRUCTURE.md)
 - Spesifikasi: [SPEC.md](SPEC.md)
 - Rencana implementasi: [tasks/plan.md](tasks/plan.md)
 - Daftar task: [tasks/todo.md](tasks/todo.md)
