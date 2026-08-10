@@ -16,6 +16,7 @@ import (
 	"github.com/ziad/liveness-verifier/internal/biometric/stub"
 	"github.com/ziad/liveness-verifier/internal/config"
 	"github.com/ziad/liveness-verifier/internal/enrollment"
+	"github.com/ziad/liveness-verifier/internal/httpapi"
 	"github.com/ziad/liveness-verifier/internal/imaging"
 	"github.com/ziad/liveness-verifier/internal/liveness"
 	"github.com/ziad/liveness-verifier/internal/storage/objectstore"
@@ -26,6 +27,8 @@ import (
 type app struct {
 	db      *postgres.DB
 	runtime *onnx.Runtime
+
+	artifacts *objectstore.Store
 
 	Liveness   *liveness.Service
 	Enrollment *enrollment.Service
@@ -169,6 +172,7 @@ func buildEnrollment(
 			return err
 		}
 		artifacts = store
+		a.artifacts = store
 
 		log.Warn("enrollment artifacts are being retained: face crops will be written to object storage",
 			slog.String("bucket", cfg.ObjectStore.Bucket),
@@ -371,4 +375,38 @@ func (randomIDs) NewID() (liveness.SessionID, error) {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
 	return liveness.SessionID(hex.EncodeToString(b[:])), nil
+}
+
+// readinessChecks are the dependencies /readyz asks about.
+//
+// Named by what an operator would look at, not by the package that implements
+// them: the probe reports the name and nothing else, so "database" has to mean
+// something to somebody reading it at three in the morning.
+func readinessChecks(a *app, cfg *config.Config) map[string]httpapi.ReadinessCheck {
+	checks := map[string]httpapi.ReadinessCheck{
+		// Ping rather than a query: the question is whether the pool can hand
+		// out a working connection, and any statement beyond that is measuring
+		// something else.
+		"database": func(ctx context.Context) error {
+			return a.db.Pool.Ping(ctx)
+		},
+
+		// Migrations, because a binary running against a schema older than
+		// itself will fail on the first request that touches a new column —
+		// and it will do that after the deployment is already taking traffic.
+		"schema": func(ctx context.Context) error {
+			return postgres.VerifySchema(ctx, a.db)
+		},
+	}
+
+	// Only when retention is on. A store nobody writes to cannot make the
+	// service unready, and checking it anyway would take instances out of
+	// rotation for a dependency they do not use.
+	if cfg.Enrollment.StoreArtifacts {
+		checks["object_store"] = func(ctx context.Context) error {
+			return a.artifacts.Ping(ctx)
+		}
+	}
+
+	return checks
 }

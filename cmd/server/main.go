@@ -85,6 +85,7 @@ func run() error {
 		Liveness:   application.Liveness,
 		Enrollment: application.Enrollment,
 		Tokens:     application.Tokens,
+		Ready:      readinessChecks(application, cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)

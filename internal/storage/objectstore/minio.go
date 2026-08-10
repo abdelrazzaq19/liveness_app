@@ -156,3 +156,19 @@ func isNotFound(err error) bool {
 	}
 	return false
 }
+
+// Ping reports whether the bucket is reachable.
+//
+// BucketExists rather than a list or a read: it is the cheapest call that
+// still proves credentials, network, and bucket all work, and a readiness probe
+// that lists objects would grow more expensive as the bucket fills.
+func (s *Store) Ping(ctx context.Context) error {
+	ok, err := s.client.BucketExists(ctx, s.bucket)
+	if err != nil {
+		return fmt.Errorf("objectstore: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("objectstore: bucket %s is gone", s.bucket)
+	}
+	return nil
+}

@@ -136,3 +136,37 @@ func withGoose(ctx context.Context, dsn string, fn func(*sql.DB) error) error {
 
 	return fn(db)
 }
+
+// VerifySchema reports whether the database is at the version this binary
+// expects.
+//
+// Checked at readiness rather than only at boot because the two can drift apart
+// afterwards: a rolling deployment runs old and new binaries against one
+// database, and an instance whose schema moved underneath it will fail on the
+// first request touching a new column — after it is already taking traffic.
+func VerifySchema(ctx context.Context, db *DB) error {
+	if db == nil || db.Pool == nil {
+		return errors.New("postgres: no pool")
+	}
+
+	var applied int64
+	err := db.Pool.QueryRow(ctx,
+		`SELECT coalesce(max(version_id), 0) FROM goose_db_version WHERE is_applied`).Scan(&applied)
+	if err != nil {
+		return fmt.Errorf("postgres: read schema version: %w", err)
+	}
+
+	if applied < ExpectedSchemaVersion {
+		return fmt.Errorf("postgres: schema is at version %d, this binary needs %d",
+			applied, ExpectedSchemaVersion)
+	}
+	return nil
+}
+
+// ExpectedSchemaVersion is the newest migration this binary knows about.
+//
+// Bumped by hand when a migration is added, which is deliberate: deriving it
+// from the embedded files would make it drift silently whenever somebody
+// added a migration without thinking about compatibility, and thinking about
+// compatibility is the entire point of the number.
+const ExpectedSchemaVersion = 6

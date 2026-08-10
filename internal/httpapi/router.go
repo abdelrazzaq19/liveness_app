@@ -36,6 +36,11 @@ type Deps struct {
 	// Tokens mints the single-use token a passed session earns. Nil means no
 	// token is issued, and enrollment is then unreachable by design.
 	Tokens TokenIssuer
+
+	// Ready holds the checks /readyz runs, keyed by the name reported when one
+	// fails. An empty map makes the service always ready, which is honest only
+	// for a deployment with no dependencies.
+	Ready map[string]ReadinessCheck
 }
 
 func (d Deps) validate() error {
@@ -76,7 +81,13 @@ func NewRouter(d Deps) (http.Handler, error) {
 	})
 
 	// Unauthenticated: container and load-balancer probes must not need a key.
+	//
+	// Two probes, because they answer different questions. /healthz says the
+	// process is alive; /readyz says it can serve. A process is often perfectly
+	// alive with an unreachable database, and answering probes with 200 in that
+	// state is how a broken instance keeps receiving traffic.
 	r.Get("/healthz", handleHealthz(log, string(d.Config.Models.Mode)))
+	r.Get("/readyz", handleReadyz(log, d.Ready))
 
 	if err := mountDemo(r); err != nil {
 		return nil, fmt.Errorf("httpapi: mount demo: %w", err)
@@ -185,7 +196,7 @@ func NewRouter(d Deps) (http.Handler, error) {
 }
 
 // healthStatus is the liveness probe payload. It answers "is this process
-// running", not "can it serve traffic" — that is what /readyz will be for.
+// running", not "can it serve traffic" — that is what /readyz answers.
 type healthStatus struct {
 	Status string `json:"status"`
 
