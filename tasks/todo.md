@@ -38,12 +38,6 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T20 handler HTTP | ✅ selesai | ✅ **lolos** — cakupan 83,7% |
 | T21 demo web UI | ✅ selesai | ⚠ **belum diverifikasi dengan webcam** — lihat Checkpoint A |
 | **Checkpoint 4** | — | ⚠ **SEBAGIAN** — A1/A4 lolos, A2/A3/A5/A6 belum |
-| T22 skema pgvector + HNSW | ⬜ berikutnya | — |
-| T23 object store MinIO | ⬜ | — |
-| T24 liveness token | ⬜ | — |
-| T25 enrollment.Service | ⬜ | — |
-| T26 handler HTTP faces | ⬜ | — |
-| T27 audit log | ⬜ | — |
 | T22 skema pgvector + HNSW | ✅ selesai | ✅ **lolos** — 10.000 wajah, p95 6,4 ms, recall@1 1,000 |
 | T23 object store MinIO | ✅ selesai | ✅ **lolos** — round-trip, kunci tanpa data pribadi |
 | T24 liveness token | ✅ selesai | ✅ **lolos** — 8 goroutine berlomba, tepat 1 menang |
