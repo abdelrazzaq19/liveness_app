@@ -1,0 +1,24 @@
+# Overlay untuk CI. Dipakai bersama compose.yaml, tidak menggantikannya:
+#
+#   docker compose -f compose.yaml -f compose.ci.yaml -p liveness-ci-42 up -d postgres minio
+#
+# Isinya satu hal saja: mencabut publikasi port.
+#
+# compose.yaml mem-bind 5432, 9000, 9001, dan 8080 ke 127.0.0.1, yang benar
+# untuk mesin pengembang. Di agent CI itu berarti build bertabrakan dengan stack
+# development yang mungkin sedang jalan di host yang sama — dan tabrakannya
+# muncul sebagai "port already allocated", bukan sebagai pesan yang menjelaskan
+# apa pun.
+#
+# Test integrasi berjalan di dalam container pada jaringan compose yang sama dan
+# menjangkau postgres serta minio lewat nama host, jadi port yang dipublikasikan
+# memang tidak dibutuhkan sama sekali di sana.
+services:
+  postgres:
+    ports: !reset []
+
+  minio:
+    ports: !reset []
+
+  api:
+    ports: !reset []

@@ -31,3 +31,6 @@ desktop.ini
 .idea/
 .vscode/
 *.swp
+
+# Artefak CI (log test).
+/build/
