@@ -21,9 +21,13 @@
 //        integration    -> Postgres + MinIO
 //        models         -> file .onnx yang tidak di-commit
 //
-//   4. Pipeline ini TIDAK men-deploy. Ia berhenti setelah image terbangun.
-//      Menambahkan deploy berarti menambahkan rollback, dan rollback butuh
-//      keputusan yang belum diambil siapa pun.
+//   4. Deploy harus diminta lewat parameter DEPLOY dan hanya berjalan di
+//      branch yang ditunjuk. Ia membawa rollback: gerbang kesehatan yang gagal
+//      mengembalikan symlink ke rilis sebelumnya dan menyalakannya kembali.
+//
+//      Rollback membalikkan KODE, tidak pernah SKEMA. Yang membuat itu aman
+//      adalah aturan bahwa setiap migrasi harus kompatibel mundur; alasannya
+//      lengkap di deploy/deploy.sh.
 pipeline {
     agent { label 'development-vps' }
 
@@ -36,6 +40,13 @@ pipeline {
     }
 
     parameters {
+        // Deploy tidak pernah terjadi hanya karena seseorang menekan Build. Ia
+        // harus diminta, dan branch guard tetap menolak kalau branch-nya salah.
+        booleanParam(
+            name: 'DEPLOY',
+            defaultValue: false,
+            description: 'Terbitkan ke lingkungan development setelah semua test lolos.'
+        )
         // Mati secara default karena model tidak ikut di-commit dan lisensinya
         // riset non-komersial. Nyalakan hanya pada agent yang benar-benar punya
         // filenya; lihat models/README.md.
@@ -53,6 +64,14 @@ pipeline {
         COMPOSE_FILES   = '-f compose.yaml -f compose.ci.yaml'
 
         GO_IMAGE = 'golang:1.23-bookworm'
+
+        // Deploy. Dipisahkan dari nama project CI supaya build tidak pernah
+        // bisa merobohkan stack yang sedang melayani.
+        DEPLOY_BRANCH           = 'development'
+        DEPLOY_ROOT             = '/opt/liveness/development'
+        DEPLOY_ENV_FILE         = '/opt/liveness/development/.env'
+        DEPLOY_COMPOSE_PROJECT  = 'liveness'
+        HEALTH_URL              = 'http://127.0.0.1:8080/readyz'
     }
 
     stages {
@@ -253,6 +272,110 @@ ENV
                     set -eu
                     docker compose --project-name "$COMPOSE_PROJECT" $COMPOSE_FILES \
                         build --pull api
+                '''
+            }
+        }
+
+        // ── Mulai dari sini pipeline menyentuh lingkungan yang hidup ────────
+
+        stage('Guard branch deploy') {
+            when { expression { return params.DEPLOY } }
+            steps {
+                sh '''
+                    set -eu
+                    # Deploy hanya dari branch yang ditunjuk. Guard-nya di sini,
+                    # bukan di `when`, supaya kegagalannya kelihatan sebagai
+                    # stage merah dan bukan sebagai stage yang diam-diam
+                    # dilewati.
+                    test "${BRANCH_NAME:-}" = "$DEPLOY_BRANCH"
+                '''
+            }
+        }
+
+        stage('Preflight deploy') {
+            when { expression { return params.DEPLOY } }
+            steps {
+                sh '''
+                    set -eu
+                    command -v curl
+                    test -d "$DEPLOY_ROOT"
+                    test -r "$DEPLOY_ENV_FILE"
+                    mkdir -p "$DEPLOY_ROOT/releases"
+
+                    # Dicek sebelum apa pun disalin: rilis yang setengah jadi
+                    # karena disk penuh lebih sulit dibereskan daripada deploy
+                    # yang menolak berjalan.
+                    df -Pk "$DEPLOY_ROOT" | awk 'NR==2 && $4 < 2097152 {
+                        print "kurang dari 2 GiB tersisa di " $6; exit 1
+                    }'
+                '''
+            }
+        }
+
+        stage('Siapkan rilis') {
+            when { expression { return params.DEPLOY } }
+            steps {
+                sh '''
+                    set -eu
+                    RELEASE_DIR="$DEPLOY_ROOT/releases/$IMAGE_TAG"
+                    mkdir -p "$RELEASE_DIR"
+
+                    # .env dikecualikan: yang dipakai rilis adalah milik host,
+                    # yang di-symlink oleh deploy.sh. Menyalin .env CI ke sana
+                    # akan menimpa kredensial lingkungan dengan nilai buangan.
+                    rsync -a --delete \
+                        --exclude .git/ \
+                        --exclude .env \
+                        --exclude build/ \
+                        --exclude .data/ \
+                        "$WORKSPACE/" "$RELEASE_DIR/"
+                '''
+            }
+        }
+
+        stage('Deploy') {
+            when { expression { return params.DEPLOY } }
+            steps {
+                sh '''
+                    set -eu
+                    RELEASE_DIR="$DEPLOY_ROOT/releases/$IMAGE_TAG"
+
+                    # deploy.sh yang memegang migrasi, penukaran symlink,
+                    # gerbang kesehatan, dan rollback. Ia keluar non-zero kalau
+                    # rilis ini gagal — termasuk ketika rollback-nya berhasil,
+                    # karena build hijau setelah rollback akan menyembunyikan
+                    # justru hal yang perlu diperbaiki.
+                    DEPLOY_ROOT="$DEPLOY_ROOT" \
+                    DEPLOY_ENV_FILE="$DEPLOY_ENV_FILE" \
+                    COMPOSE_PROJECT="$DEPLOY_COMPOSE_PROJECT" \
+                    HEALTH_URL="$HEALTH_URL" \
+                    HEALTH_TIMEOUT=120 \
+                    bash "$RELEASE_DIR/deploy/deploy.sh" "$RELEASE_DIR" "$IMAGE_TAG"
+                '''
+            }
+        }
+
+        stage('Pangkas rilis lama') {
+            when { expression { return params.DEPLOY } }
+            steps {
+                sh '''
+                    set -eu
+                    # Menyimpan lima yang terbaru. Rollback hanya butuh satu,
+                    # tapi lima memberi ruang untuk mundur lebih dari satu
+                    # langkah ketika ternyata regresinya sudah ada sejak dua
+                    # rilis lalu.
+                    #
+                    # Rilis yang sedang aktif tidak pernah ikut dipangkas,
+                    # berapa pun umurnya.
+                    current=$(readlink -f "$DEPLOY_ROOT/current" || true)
+
+                    ls -1dt "$DEPLOY_ROOT"/releases/*/ 2>/dev/null | tail -n +6 | while read -r dir; do
+                        if [ "$(readlink -f "$dir")" = "$current" ]; then
+                            continue
+                        fi
+                        echo "memangkas $(basename "$dir")"
+                        rm -rf "$dir"
+                    done
                 '''
             }
         }

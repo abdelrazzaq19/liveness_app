@@ -19,6 +19,7 @@ import (
 
 	"github.com/ziad/liveness-verifier/internal/config"
 	"github.com/ziad/liveness-verifier/internal/httpapi"
+	"github.com/ziad/liveness-verifier/internal/storage/postgres"
 )
 
 func main() {
@@ -31,6 +32,8 @@ func main() {
 func run() error {
 	healthcheck := flag.Bool("healthcheck", false,
 		"probe the local /healthz endpoint and exit; used by the container HEALTHCHECK")
+	migrate := flag.Bool("migrate", false,
+		"apply pending database migrations and exit; run once per deployment, before the new version starts")
 	flag.Parse()
 
 	if *healthcheck {
@@ -40,6 +43,17 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+
+	// Migrations are a separate invocation, never something the server does on
+	// its way up.
+	//
+	// A server that migrates at boot is a server that races with itself the
+	// moment there is more than one replica, and one that half-migrates when it
+	// crashes during startup. Making it a command means a deployment decides
+	// when the schema moves, and can stop if it does not.
+	if *migrate {
+		return runMigrations(cfg)
 	}
 
 	log := newLogger(cfg.Log)
@@ -189,6 +203,48 @@ func probeHealth() error {
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("probe %s: status %d", url, resp.StatusCode)
+	}
+	return nil
+}
+
+// runMigrations applies pending migrations and reports where the schema landed.
+//
+// Forward only. Rolling a migration back is not something a deployment should
+// do on its own: `retries` holds real values, and dropping the column to undo a
+// release would take them with it. Reverting the code is safe because every
+// migration here is additive — see deploy/deploy.sh for what that buys.
+func runMigrations(cfg *config.Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	dsn := cfg.Database.URL.Reveal()
+
+	before, err := postgres.MigrationVersion(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	if err := postgres.Migrate(ctx, dsn); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	after, err := postgres.MigrationVersion(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	// Printed rather than logged: this runs as a one-shot command whose output
+	// somebody is reading, and a deployment log that says which versions moved
+	// is what makes a failed release diagnosable afterwards.
+	if before == after {
+		fmt.Printf("schema already at version %d; nothing to apply\n", after)
+	} else {
+		fmt.Printf("schema moved from version %d to %d\n", before, after)
+	}
+
+	if after < postgres.ExpectedSchemaVersion {
+		return fmt.Errorf("schema is at %d but this binary needs %d; migrations did not fully apply",
+			after, postgres.ExpectedSchemaVersion)
 	}
 	return nil
 }
