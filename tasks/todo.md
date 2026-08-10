@@ -44,10 +44,32 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T25 enrollment.Service | ⬜ | — |
 | T26 handler HTTP faces | ⬜ | — |
 | T27 audit log | ⬜ | — |
-| T28 suite regresi serangan | ⬜ | — |
-| T29 observability + readyz | ⬜ | — |
+| T22 skema pgvector + HNSW | ✅ selesai | ✅ **lolos** — 10.000 wajah, p95 6,4 ms, recall@1 1,000 |
+| T23 object store MinIO | ✅ selesai | ✅ **lolos** — round-trip, kunci tanpa data pribadi |
+| T24 liveness token | ✅ selesai | ✅ **lolos** — 8 goroutine berlomba, tepat 1 menang |
+| T25 enrollment.Service | ✅ selesai | ✅ **lolos** — pengikatan identitas terbukti menangkap serangannya |
+| T26 handler HTTP faces | ✅ selesai | ✅ **lolos** — 401/403/422/404 terverifikasi hidup |
+| T27 audit log | ✅ selesai | ✅ **lolos** — insert dibatalkan saat audit gagal |
+| **Checkpoint B** | — | ⚠ **SEBAGIAN** — kriteria pencarian lolos; end-to-end dengan wajah sungguhan menunggu webcam |
+| T28 suite regresi serangan | ⚠ sebagian | 10 serangan ditolak; foto cetak & replay layar diblokir Open Question #3 |
+| T29 observability + readyz | ✅ selesai | ✅ **lolos** — 503 saat Postgres mati, /healthz tetap 200 |
 | T30 harness kalibrasi | ⛔ diblokir | Open Question #2 dan #3 |
-| T31 README + verifikasi akhir | ⬜ | — |
+| T31 README + verifikasi akhir | ⬜ berikutnya | — |
+
+### Yang belum terlindungi, dan kenapa
+
+Suite serangan menolak sepuluh hal: sequence di-replay, sequence mundur, gambar
+diam ditahan terlalu lama, nonce salah pada tiga endpoint, sesi diselesaikan
+lebih awal, sesi kedaluwarsa, pembuatan sesi tanpa API key, urutan challenge
+yang bisa ditebak, dan penolakan yang membocorkan pertahanan mana yang bekerja.
+Ditambah satu yang membuktikan subjek jujur yang diam sebentar **tidak** ditolak
+— tanpa itu, suite ini hanya membuktikan sistemnya galak, bukan benar.
+
+**Foto cetak dan replay layar tidak diuji.** Keduanya butuh capture wajah asli
+berlabel, yang tidak boleh disimpan repo ini, dan model anti-spoof yang akan
+mereka uji sedang dimatikan. Gambar sintetis akan lolos karena alasan yang
+salah, jadi celahnya dicatat di sini alih-alih ditutup dengan test yang
+membohongi dirinya sendiri.
 
 ### Ditemukan setelah tabel di atas ditulis
 
