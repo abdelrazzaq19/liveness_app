@@ -4,6 +4,7 @@ Service Go tunggal untuk **verifikasi liveness aktif** (challenge-response) dan
 **enrollment wajah + pencarian 1:N**, berjalan sepenuhnya lokal lewat Docker.
 Tanpa panggilan ke layanan cloud mana pun.
 
+- Kontrak API: [docs/API.md](docs/API.md)
 - Spesifikasi: [SPEC.md](SPEC.md)
 - Rencana implementasi: [tasks/plan.md](tasks/plan.md)
 - Daftar task: [tasks/todo.md](tasks/todo.md)
