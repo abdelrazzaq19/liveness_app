@@ -169,14 +169,34 @@ ENV
                     # yang jatuh lebih dulu.
                     #
                     # Workspace di-mount read-only supaya test tidak bisa
-                    # mengubah sumber yang sedang diujinya.
+                    # mengubah sumber yang sedang diujinya. Keluaran ditulis ke
+                    # $WORKSPACE/build dari sisi host, bukan lewat mount itu.
+                    rc=0
                     docker run --rm \
                         --mount "type=bind,source=$WORKSPACE,target=/src,readonly" \
                         --mount type=volume,source=liveness-go-mod-cache,target=/go/pkg/mod \
                         --mount type=volume,source=liveness-go-build-cache,target=/root/.cache/go-build \
                         --workdir /src \
                         "$GO_IMAGE" \
-                        go test -race -count=1 ./... 2>&1 | tee build/test-unit.log
+                        go test -race -count=1 -json ./... > build/test-unit.json || rc=$?
+
+                    # Konversi ke JUnit dilakukan APA PUN hasilnya. Build yang
+                    # gagal justru yang paling butuh laporannya, dan konversi
+                    # yang hanya jalan saat hijau tidak berguna.
+                    #
+                    # Kode keluarnya sengaja diabaikan di sini, dan itu bukan
+                    # kelalaian: `gotestsum --raw-command -- cat` meneruskan kode
+                    # keluar `cat`, yang selalu nol. Mempercayainya berarti test
+                    # merah dengan build hijau — kegagalan CI yang paling
+                    # berbahaya karena tidak terlihat.
+                    docker compose --project-name "$COMPOSE_PROJECT" $COMPOSE_FILES \
+                        run --rm --no-deps dev \
+                        gotestsum --junitfile build/test-unit.xml \
+                        --raw-command -- cat build/test-unit.json || true
+
+                    # Yang menentukan lulus atau tidak adalah kode keluar go
+                    # test, yang ditangkap di atas.
+                    exit $rc
                 '''
             }
         }
@@ -190,10 +210,13 @@ ENV
                     docker compose --project-name "$COMPOSE_PROJECT" $COMPOSE_FILES \
                         up -d --wait postgres minio
 
+                    # Di sini gotestsum menjalankan go test sendiri, jadi kode
+                    # keluarnya memang mencerminkan hasil test dan boleh
+                    # dipercaya.
                     docker compose --project-name "$COMPOSE_PROJECT" $COMPOSE_FILES \
                         run --rm dev \
-                        go test -tags=integration -count=1 -timeout 20m ./tests/integration/... \
-                        2>&1 | tee build/test-integration.log
+                        gotestsum --junitfile build/test-integration.xml --format testname \
+                        -- -tags=integration -count=1 -timeout 20m ./tests/integration/...
                 '''
             }
         }
@@ -218,8 +241,8 @@ ENV
 
                     docker compose --project-name "$COMPOSE_PROJECT" $COMPOSE_FILES \
                         run --rm --no-deps dev \
-                        go test -tags=models -count=1 -timeout 20m ./internal/biometric/onnx/... \
-                        2>&1 | tee build/test-models.log
+                        gotestsum --junitfile build/test-models.xml --format testname \
+                        -- -tags=models -count=1 -timeout 20m ./internal/biometric/onnx/...
                 '''
             }
         }
@@ -237,11 +260,19 @@ ENV
 
     post {
         always {
-            // Log test disimpan sebagai artefak. Jenkins tidak bisa menampilkan
-            // tren atau test mana yang jatuh tanpa XML JUnit; itu perlu
-            // gotestsum di image dev, dan menambah perkakas ke image adalah
-            // keputusan tersendiri yang belum diambil.
-            archiveArtifacts artifacts: 'build/*.log', allowEmptyArchive: true, fingerprint: false
+            // Hasil test dipublikasikan sebagai JUnit, sehingga Jenkins bisa
+            // menampilkan test mana yang jatuh dan trennya lintas build alih-alih
+            // memaksa orang membaca log mentah.
+            //
+            // allowEmptyResults karena stage bisa saja tidak pernah berjalan —
+            // gerbang kualitas yang gagal menghentikan pipeline sebelum test
+            // apa pun dijalankan, dan itu bukan alasan untuk menandai build
+            // sebagai tidak stabil karena laporannya kosong.
+            junit testResults: 'build/*.xml', allowEmptyResults: true, skipPublishingChecks: true
+
+            // JSON mentahnya ikut disimpan: ia memuat keluaran per test yang
+            // tidak seluruhnya masuk ke XML.
+            archiveArtifacts artifacts: 'build/*.json', allowEmptyArchive: true, fingerprint: false
 
             // Dirobohkan tanpa syarat, termasuk volume-nya. Container yang
             // tertinggal di agent akan menahan port dan disk sampai ada yang

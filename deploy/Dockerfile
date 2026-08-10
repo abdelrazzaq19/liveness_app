@@ -115,9 +115,16 @@ RUN cp -a /opt/onnxruntime/lib/libonnxruntime.so* /usr/local/lib/ \
  && ldconfig \
  && ldconfig -p | grep -q libonnxruntime
 
+# gotestsum turns `go test -json` into JUnit XML.
+#
+# Only CI needs it, but it lives here rather than being fetched per build: a
+# pipeline that downloads a tool on every run is a pipeline that breaks when the
+# network does, and pinning it in the image is what makes the version the same
+# for everyone.
 RUN go install mvdan.cc/gofumpt@v0.7.0 \
  && go install github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
- && go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.61.0
+ && go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.61.0 \
+ && go install gotest.tools/gotestsum@v1.12.0
 
 WORKDIR /src
 CMD ["go", "test", "./...", "-race"]
