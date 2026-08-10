@@ -1,7 +1,15 @@
 # Spec: Liveness Verifier
 
-> Status: **DRAFT — menunggu review** · Versi 0.1 · 2026-08-06
-> Fase spec-driven: **1/4 (Specify)**. Belum boleh masuk Plan/Tasks/Implement sebelum spec ini di-approve.
+> Status: **DISETUJUI — mengikuti implementasi** · Versi 0.3 · 2026-08-10
+> Fase spec-driven: **4/4 (Implement)**. 31 task selesai. Tiga kriteria di §9
+> masih merah — **A5** (anti-spoof) menunggu jawaban di §10, **X2** (coverage)
+> dan **X6** (README di mesin bersih) menunggu kerja.
+>
+> **Kepala dokumen ini sempat berbohong.** Sampai versi 0.3 ia masih menulis
+> "DRAFT · Versi 0.1 · belum boleh masuk Plan" sementara riwayat revisinya
+> sendiri mencatat persetujuan di 0.2 dan seluruh implementasinya sudah jadi.
+> Dicatat di sini, bukan diam-diam diperbaiki: dokumen yang salah tentang
+> statusnya sendiri adalah dokumen yang orang berhenti percayai.
 
 ---
 
@@ -53,7 +61,7 @@ Rekomendasi saya: **kerjakan berurutan** — Milestone A (liveness) harus jalan 
 | Logging | `log/slog` (stdlib), JSON handler | Zero dependency, structured. |
 | Config | Env var → struct `internal/config`, di-load sekali saat boot | 12-factor. Tidak ada file config runtime. |
 | Demo UI | HTML + vanilla JS + `getUserMedia`, di-`embed` ke binary | Tidak ada Node/npm. "Project tunggal" tetap tunggal. |
-| Test | `testing` + `github.com/stretchr/testify/require` + `testcontainers-go` | Unit murni Go; integrasi terhadap Postgres/MinIO asli. |
+| Test | `testing` stdlib saja | **Tanpa testify:** assertion tiga baris tidak sepadan dengan satu dependensi lagi di jalur yang menguji data biometrik. **Tanpa testcontainers:** ia menuntut socket Docker di-mount ke dalam proses test, dan memberi test kemampuan menjalankan container sembarang adalah hak yang tidak dibutuhkan — Postgres dan MinIO yang diinginkannya sudah hidup di jaringan compose yang sama. |
 | Lint | `golangci-lint` v1.61, `gofumpt` | Gate kualitas di CI dan pre-commit. |
 
 ### Model ONNX yang dipakai
@@ -93,7 +101,7 @@ Semua perintah dijalankan dari root project. **Toolchain Go tidak perlu terpasan
 
 ```bash
 # --- Setup awal (sekali saja) ---
-cp deploy/.env.example .env
+cp .env.example .env
 docker compose --profile setup run --rm modelctl download   # unduh + verifikasi checksum model
 
 # --- Menjalankan ---
@@ -127,9 +135,15 @@ docker compose run --rm dev go build -trimpath -o bin/server ./cmd/server
 docker build -f deploy/Dockerfile -t liveness-verifier:local .
 
 # --- Utilitas ---
-docker compose run --rm dev go run ./cmd/modelctl verify       # cek integritas model
-docker compose run --rm dev go run ./cmd/bench -images testdata/faces  # benchmark latensi
+docker compose run --rm dev go run ./cmd/modelctl verify        # cek integritas model
+docker compose run --rm dev go run ./cmd/bench -synthetic 60 -full   # latensi per tahap
+docker compose run --rm dev go run ./cmd/bench -images <dir>    # sama, atas frame sungguhan
+docker compose run --rm dev go run ./cmd/calibrate -h           # sapuan FAR/FRR
 ```
+
+`-synthetic` membangkitkan adegannya sendiri, jadi benchmark bisa dijalankan
+tanpa menaruh satu pun wajah sungguhan di repo. Ia mengukur **waktu**, bukan
+kualitas deteksi; untuk yang kedua arahkan `-images` ke direktori di luar repo.
 
 **Port yang dipakai:** `8080` API+demo · `5432` Postgres · `9000`/`9001` MinIO API/Console.
 
@@ -137,17 +151,27 @@ docker compose run --rm dev go run ./cmd/bench -images testdata/faces  # benchma
 
 ## 4. Project Structure
 
+Pohon di bawah ini adalah bentuk yang **sudah berdiri**, bukan rencana.
+[docs/STRUCTURE.md](docs/STRUCTURE.md) memuat versi lengkapnya beserta berkas
+test; yang di sini dipangkas ke berkas yang membawa keputusan desain.
+
 ```
 liveness-verifier/
 ├── SPEC.md                        # dokumen ini — source of truth
 ├── README.md                      # quickstart 5 menit
+├── Jenkinsfile                    # CI: gerbang kualitas → 3 lapis test → image → deploy
+├── compose.yaml                   # stack pengembangan
+├── compose.ci.yaml                # overlay CI: `ports: !reset []`, tidak ada port terbit
 ├── go.mod / go.sum
 ├── .env.example                   # template konfigurasi (TIDAK berisi secret asli)
 │
 ├── cmd/
-│   ├── server/main.go             # entrypoint HTTP server; wiring dependency saja
-│   ├── modelctl/main.go           # download + verifikasi checksum model ONNX
-│   └── bench/main.go              # benchmark latensi inference offline
+│   ├── server/
+│   │   ├── main.go                # entrypoint; juga -migrate dan -healthcheck
+│   │   └── wire.go                # konstruksi dependency — satu-satunya tempatnya
+│   ├── modelctl/                  # download + verifikasi checksum model ONNX
+│   ├── bench/                     # benchmark latensi inference offline
+│   └── calibrate/                 # sapuan FAR/FRR atas galeri berlabel
 │
 ├── internal/
 │   ├── config/                    # struct Config + parsing env + validasi saat boot
@@ -157,6 +181,9 @@ liveness-verifier/
 │   │   ├── middleware.go          # request ID, recover, timeout, API key, rate limit
 │   │   ├── dto.go                 # struct request/response JSON + validasi
 │   │   ├── errors.go              # mapping error domain → HTTP status + body
+│   │   ├── ratelimit.go           # ember token per-kunci
+│   │   ├── readiness.go           # /readyz: menyebut NAMA cek yang gagal
+│   │   ├── web.go                 # menyajikan demo yang di-embed
 │   │   ├── liveness_handler.go
 │   │   └── faces_handler.go
 │   │
@@ -169,60 +196,88 @@ liveness-verifier/
 │   │
 │   ├── enrollment/                # DOMAIN — galeri wajah, 1:N search
 │   │   ├── service.go             # Enroll / Search / Get / Delete
-│   │   └── threshold.go           # kalibrasi ambang cosine similarity
+│   │   ├── types.go               # Face, Repository, validasi
+│   │   ├── token.go               # token sekali pakai, disimpan sebagai HMAC
+│   │   ├── audit.go               # jejak yang tak terpisahkan dari barisnya
+│   │   └── artifact.go            # retensi gambar — mati secara default
+│   │
+│   ├── calibrate/                 # sapuan FAR/FRR; menolak "target" yang hanya
+│   │   └── sweep.go               #   tercapai dengan menolak semua orang jujur
 │   │
 │   ├── biometric/                 # PORT — interface, bebas dari ONNX
 │   │   ├── types.go               # Face, BBox, Landmarks, Pose, Embedding
 │   │   ├── ports.go               # Detector, Landmarker, AntiSpoofer, Embedder
-│   │   ├── pose.go                # PnP: 106 landmark → yaw/pitch/roll
-│   │   ├── metrics.go             # EAR (blink), MAR (buka mulut)
+│   │   ├── pipeline.go            # merangkai keempatnya jadi satu analisis frame
+│   │   ├── pose.go                # perspektif-lemah: 106 landmark → yaw/pitch/roll
+│   │   ├── metrics.go             # EAR (kedip), MAR (buka mulut), indeks landmark
+│   │   ├── embedding.go           # kosinus, L2-normalisasi
+│   │   ├── stub/                  # pipeline deterministik; default seluruh test
 │   │   └── onnx/                  # ADAPTER — implementasi onnxruntime_go
-│   │       ├── runtime.go         # init/teardown ORT env, session pool
+│   │       ├── runtime.go         # init/teardown ORT env
+│   │       ├── pool.go            # *ort.Session tidak aman untuk konkurensi
 │   │       ├── detector_scrfd.go
 │   │       ├── landmarker_2d106.go
 │   │       ├── antispoof_minifas.go
 │   │       └── embedder_arcface.go
 │   │
 │   ├── imaging/                   # decode, EXIF, resize, align 5-point, normalisasi
-│   │   ├── decode.go
+│   │   ├── decode.go              # batas byte DAN batas piksel — keduanya perlu
+│   │   ├── exif.go
 │   │   ├── align.go               # similarity transform ke template 112x112
 │   │   ├── quality.go             # blur (Laplacian var), brightness, ukuran wajah
 │   │   └── phash.go               # perceptual hash untuk deteksi frame duplikat
 │   │
 │   └── storage/
 │       ├── postgres/              # ADAPTER — repository, pgvector codec
-│       │   ├── db.go
+│       │   ├── db.go              # pool, VerifySchema, Migrate
 │       │   ├── session_repo.go
-│       │   ├── face_repo.go       # termasuk query HNSW 1:N
-│       │   └── audit_repo.go
-│       └── objstore/              # ADAPTER — MinIO
+│       │   ├── face_repo.go       # query HNSW 1:N; sisip wajah + audit satu transaksi
+│       │   └── token_store.go     # belanja token secara atomik lewat UPDATE ... RETURNING
+│       └── objectstore/           # ADAPTER — MinIO
 │           └── minio.go
 │
 ├── migrations/                    # goose SQL, penomoran urut
 │   ├── 00001_init_extensions.sql
 │   ├── 00002_liveness_sessions.sql
-│   ├── 00003_faces_pgvector.sql
-│   └── 00004_audit_log.sql
+│   ├── 00003_session_retries.sql
+│   ├── 00004_face_gallery.sql
+│   ├── 00005_liveness_tokens.sql
+│   ├── 00006_audit_log.sql
+│   └── embed.go                   # //go:embed — migrasi ikut ke dalam biner
 │
 ├── web/                           # di-embed via //go:embed
-│   ├── index.html                 # demo: webcam → challenge → verdict
-│   ├── app.js
-│   └── style.css
+│   ├── embed.go
+│   └── static/                    # demo: webcam → challenge → verdict
+│       ├── index.html
+│       ├── app.js
+│       └── style.css
+│
+├── tools/
+│   └── antispoof/                 # container sekali-jalan: PyTorch → ONNX
+│       ├── Dockerfile             #   meng-clone repo hulu; tidak ada arsitektur
+│       ├── convert.py             #   yang ditulis ulang dari ingatan
+│       └── probe.py               # membuktikan ONNX == PyTorch, logit demi logit
+│
+├── docs/
+│   ├── API.md                     # kontrak: alur, endpoint, kode error
+│   ├── STRUCTURE.md               # pohon lengkap
+│   └── DEPLOY.md                  # deploy pertama + cara membuktikan rollback
 │
 ├── models/                        # .onnx + manifest.json  (DI-GITIGNORE, kecuali manifest)
 │   └── manifest.json              # nama, URL, SHA-256, lisensi tiap model
 │
-├── testdata/                      # gambar fixture untuk unit test (wajah sintetis/CC0)
-│   ├── golden/                    # golden file output detector/embedder
-│   └── attacks/                   # sampel print & replay attack untuk regression
+├── tasks/
+│   ├── plan.md                    # 31 task, 6 fase
+│   ├── todo.md                    # status per task
+│   └── baseline.md                # metodologi dan angka pengukuran detektor
 │
-├── tests/integration/             # build tag `integration`, pakai testcontainers
+├── tests/
+│   ├── attack/                    # 10 serangan, TANPA build tag
+│   └── integration/               # build tag `integration`, terhadap stack compose
 │
 └── deploy/
     ├── Dockerfile                 # multi-stage: builder (CGO) → runtime slim
-    ├── Dockerfile.dev             # image dev: go, golangci-lint, goose, gofumpt
-    ├── docker-compose.yml
-    └── .env.example
+    └── deploy.sh                  # rilis + gerbang kesehatan + rollback
 ```
 
 **Aturan dependensi (ditegakkan lewat review, bukan hanya konvensi):**
@@ -235,36 +290,73 @@ httpapi ──→ liveness / enrollment ──→ biometric (port) ──→ bio
 
 - `internal/biometric` **tidak boleh** mengimpor `onnxruntime_go`. Hanya `internal/biometric/onnx` yang boleh.
 - `internal/liveness` dan `internal/enrollment` **tidak boleh** mengimpor `net/http` atau `chi`.
-- Wiring semua dependency terjadi **hanya** di `cmd/server/main.go`.
+- Wiring semua dependency terjadi **hanya** di `cmd/server/wire.go`.
 
 ---
 
 ## 5. API Surface
 
-Semua endpoint di-prefix `/v1`, membutuhkan header `X-API-Key`. Body JSON, gambar dikirim sebagai base64 di field `frame` (batas 2 MB per frame).
+Semua endpoint di-prefix `/v1`. Body JSON, gambar dikirim sebagai base64 di
+field `frame` (batas 2 MB per frame, **dan** 16 juta piksel setelah decode —
+batas byte saja tidak cukup, sebuah PNG 200 kB bisa mekar jadi gigabyte).
+
+**Tidak semua endpoint memakai `X-API-Key`, dan itu disengaja.** Kolom Auth di
+bawah adalah bagian dari kontrak:
 
 ### Liveness
 
-| Method | Path | Fungsi |
-|---|---|---|
-| `POST` | `/v1/liveness/sessions` | Buat sesi. Response: `session_id`, `nonce`, daftar `challenges` (urutan diacak), `expires_at`. |
-| `POST` | `/v1/liveness/sessions/{id}/frames` | Kirim 1 frame + `seq` + `client_ts`. Response: challenge aktif, progres, `advanced` (bool), alasan jika ditolak. |
-| `POST` | `/v1/liveness/sessions/{id}/complete` | Finalisasi. Response: `verdict` (`PASSED` / `FAILED`), skor, `liveness_token` (JWT singkat, dipakai untuk enroll). |
-| `GET` | `/v1/liveness/sessions/{id}` | Status sesi (tanpa data biometrik mentah). |
+| Method | Path | Auth | Fungsi |
+|---|---|---|---|
+| `POST` | `/v1/liveness/sessions` | `X-API-Key` | Buat sesi. Response: `session_id`, `nonce`, daftar `challenges` (urutan diacak), `expires_at`. |
+| `POST` | `/v1/liveness/sessions/{id}/frames` | **nonce sesi** | Kirim 1 frame + `seq` + `client_ts`. Response: challenge aktif, progres, `advanced` (bool), alasan jika ditolak. |
+| `POST` | `/v1/liveness/sessions/{id}/complete` | **nonce sesi** | Finalisasi. Response: `state`, `passed`, dan `token` bila lolos. |
+| `GET` | `/v1/liveness/sessions/{id}` | **nonce sesi** | Status sesi (tanpa data biometrik mentah). |
+
+Tiga endpoint bernonce itu berjalan di peramban subjek. API key adalah kredensial
+**operator**; menaruhnya di peramban orang yang sedang diverifikasi adalah cara
+kredensial itu berakhir di tempat yang tidak seharusnya. Yang menggantikannya:
+`session_id` dan `nonce`, masing-masing 128 bit acak, kedaluwarsa bersama
+sesinya, dan dicek dalam waktu konstan. Memegang keduanya adalah kapabilitasnya.
+
+Membuat sesi tetap butuh kunci karena ia mengalokasikan baris database dan slot
+kerja inference — itu harus bisa diatribusikan.
+`LV_ALLOW_ANONYMOUS_SESSIONS=true` membuka **hanya rute itu**, dan server
+memperingatkannya di tiap boot.
 
 ### Faces
 
-| Method | Path | Fungsi |
-|---|---|---|
-| `POST` | `/v1/faces` | Enroll. Wajib menyertakan `liveness_token` yang valid & belum terpakai. |
-| `POST` | `/v1/faces/search` | **1:N** — satu gambar → top-K kandidat + `similarity`, `match` (bool). |
-| `POST` | `/v1/faces/verify` | **1:1** — gambar vs `subject_id` tertentu. *(Turunan gratis dari 1:N — satu handler tipis. Coret kalau tidak perlu.)* |
-| `GET` | `/v1/faces/{subject_id}` | Metadata subject (tanpa embedding mentah). |
-| `DELETE` | `/v1/faces/{subject_id}` | Hapus subject: embedding + objek di MinIO + tandai audit. Hard delete. |
+| Method | Path | Auth | Fungsi |
+|---|---|---|---|
+| `POST` | `/v1/faces` | `X-API-Key` **+** `token` | Enroll. Token liveness membuktikan penangkapannya hidup; kunci membuktikan siapa yang boleh menulis ke galeri. Tidak satu pun menggantikan yang lain. |
+| `POST` | `/v1/faces/search` | `X-API-Key` | **1:N** — satu gambar → top-K kandidat + `score`, `matched` (bool). |
+| `DELETE` | `/v1/faces` | `X-API-Key` | Hapus subject: embedding + baris audit. Hard delete. `subject_id` di **body**. |
+
+**`/v1/faces/verify` dan `GET /v1/faces/{subject_id}` tidak dibangun.** Spec ini
+sendiri menandai yang pertama opsional; yang kedua tidak dipakai jalur mana pun.
+Menambahkannya nanti tidak merusak apa pun yang sudah ada.
+
+**`subject_id` ada di body, bukan di path — ini penyimpangan yang disengaja
+dari REST konvensional.** Segmen path terbaca sebagai pilihan yang benar, dan di
+sini salah: `subject_id` ditentukan integrator dan lazimnya nomor identitas atau
+nomor rekening, sementara path mendarat di log akses, log proxy, dan riwayat
+peramban. Penalaran yang sama sudah menjaganya keluar dari query string.
+
+**`token` bukan JWT.** Spec versi 0.1 menyebutnya JWT; implementasinya token
+acak 256 bit yang disimpan sebagai HMAC. Tanda tangan bisa membuktikan token
+diterbitkan di sini dan belum kedaluwarsa, tapi **tidak bisa membuktikan belum
+pernah dipakai** — dan "dipakai tepat sekali" justru inti pertahanannya. Sekali
+pakai menuntut state; begitu state ada, tanda tangan tidak menambah apa pun.
 
 ### Operasional
 
-`GET /healthz` (liveness probe) · `GET /readyz` (cek DB, MinIO, model ter-load) · `GET /demo` (UI).
+`GET /healthz` (prosesnya hidup) · `GET /readyz` (database, versi skema, object
+store — **bukan** "model ter-load"; model dimuat saat boot dan gagal di sana,
+jadi proses yang modelnya tidak ada tidak pernah sampai menerima probe) ·
+`GET /demo` (UI). Ketiganya tanpa kunci.
+
+`/readyz` menyebut **nama** cek yang gagal di response-nya. Itu bocoran kecil
+yang sengaja diterima: probe ini tidak terekspos ke publik, dan deploy yang
+gagal pada pukul tiga pagi butuh tahu *mana* yang mati tanpa harus membuka log.
 
 ### Anti-replay: lapisan pertahanan
 
@@ -279,16 +371,38 @@ Sesi dianggap valid hanya jika **semua** ini terpenuhi:
 
 ### Threshold awal (bukan hasil kalibrasi — lihat §9)
 
-| Parameter | Nilai awal | Sumber |
+| Parameter | Nilai berlaku | Sumber |
 |---|---|---|
 | Skor deteksi wajah minimum | 0.60 | default SCRFD |
-| Lebar wajah minimum | 112 px | ukuran input ArcFace |
-| EAR blink (mata tertutup) | < 0.21 selama ≥ 2 frame berturut | literatur Soukupová & Čech |
-| Yaw untuk tengok kiri/kanan | \|yaw\| > 25° | ditetapkan, perlu kalibrasi |
-| MAR buka mulut | > 0.55 | ditetapkan, perlu kalibrasi |
-| Skor passive liveness minimum | 0.80 | ditetapkan, perlu kalibrasi |
+| Lebar wajah minimum | 112 px | ukuran input ArcFace — **bukan** angka yang boleh diturunkan |
+| Kedip | rasio **0.60 / 0.85** terhadap bukaan terlebar subjek | **diukur**, menggantikan EAR mutlak |
+| Yaw untuk tengok kiri/kanan | pergeseran ≥ **15°** dari baseline | **diukur**, turun dari 25° |
+| Pitch untuk angguk | pergeseran ≥ 15° dari baseline | ditetapkan |
+| MAR buka mulut | ≥ 0.55 | satu-satunya ambang di blok ini yang **terbukti bekerja** |
+| Skor passive liveness minimum | 0.80 — **tidak ditegakkan** | lihat lapisan 5 di atas |
 | Cosine match 1:N | ≥ 0.42 | rekomendasi umum buffalo_l |
+| Konsistensi identitas | cosine ≥ 0.70 | dipakai juga untuk mengikat wajah enrollment |
 | Blur minimum (Laplacian variance) | > 80 | ditetapkan, perlu kalibrasi |
+
+**Ambang kedip diubah dari mutlak ke relatif, dan itu perbaikan bug, bukan
+penyetelan.** Angka 0.21/0.30 adalah literatur untuk skema landmark dlib 68
+titik; model ini 106 titik dengan pemilihan indeks sendiri. Pada sesi sungguhan
+pipeline ini menghasilkan EAR 0,030–0,300 dengan rata-rata 0,124 — **nol dari 34
+frame** pernah mencapai ambang "terbuka" 0,30. Challenge kedip bukan sulit
+dipenuhi, melainkan mustahil. Sekarang diukur sebagai penurunan terhadap bukaan
+terlebar subjek itu sendiri, penalaran yang sama yang sejak awal dipakai untuk
+gerakan menoleh.
+
+**Yaw turun ke 15° karena subjek yang jelas-jelas menoleh hanya menghasilkan 22°.**
+Kecurigaan yang belum terbukti dan sengaja dicatat: pitch terbaca 40–72° padahal
+subjek menghadap layar laptop, yang tidak masuk akal secara fisik. Kalau benar
+ada bias sebesar itu, akar masalahnya di estimasi pose dan bukan di ambang ini.
+
+⚠️ **Ini bukan kalibrasi.** Angka yang ditandai "diukur" berasal dari **satu
+orang, satu kamera, satu ruangan, 34 frame** — cukup untuk membuktikan angka
+lama salah, sama sekali tidak cukup untuk menyebut yang baru benar. Open
+Question #2 dan #3 tetap terbuka, dan `cmd/calibrate` sudah siap dijalankan
+begitu datanya ada.
 
 Semua nilai di atas **wajib** dapat dioverride lewat env var. Tidak boleh ada angka ajaib yang di-hardcode di tengah logika.
 
@@ -368,6 +482,26 @@ func (s *Service) SubmitFrame(ctx context.Context, sessionID SessionID, f Frame)
 }
 ```
 
+> **Satu hal yang sketsa di atas salah, dan biayanya mahal.**
+> Ia memeriksa penjaga lalu `return` sebelum evaluator melihat frame-nya. Kode
+> sungguhannya sempat begitu, dan akibatnya: subjek yang menahan pose — persis
+> yang diminta challenge — menghasilkan frame yang mirip frame sebelumnya,
+> penjaga duplikat menolaknya, dan gerakan yang **sudah benar** tidak pernah
+> sampai ke evaluator. Sesinya habis waktu sementara subjek melakukan hal yang
+> tepat. Bentuk yang benar memisahkan penolakan yang **fatal** dari yang
+> **bisa dipulihkan**, dan hanya yang pertama boleh menghentikan evaluasi:
+>
+> ```go
+> // A recoverable rejection must not stop the frame being evaluated.
+> if guardErr := s.deps.Guard.CheckAnalysis(session, frame, face); Fatal(guardErr) {
+>     return s.endSession(ctx, session, now, failSession, guardErr.Error())
+> }
+> outcome := s.deps.Evaluator.Evaluate(session, face)
+> ```
+>
+> Dibiarkan di sini beserta perbaikannya, bukan diam-diam ditukar: contoh yang
+> menetapkan standar sebaiknya juga menunjukkan apa yang pernah menjatuhkannya.
+
 **Konvensi yang mengikat:**
 
 | Aturan | Detail |
@@ -391,11 +525,10 @@ func (s *Service) SubmitFrame(ctx context.Context, sessionID SessionID, f Frame)
 | Level | Lokasi | Cakupan | Perintah |
 |---|---|---|---|
 | **Unit** | `*_test.go` bersebelahan dengan source | State machine sesi, EAR/MAR/pose math, anti-replay, parsing config, threshold. Semua dependency di-fake. | `go test ./... -race` |
-| **Golden** | `testdata/golden/` | Output detector/landmarker/embedder terhadap gambar fixture tetap. Mendeteksi regresi diam-diam saat ganti versi model. | `go test ./internal/biometric/...` |
-| **Integrasi** | `tests/integration/` (tag `integration`) | Postgres asli (pgvector, HNSW recall) + MinIO asli via testcontainers. Migrasi naik-turun. | `go test -tags=integration ./tests/integration/...` |
-| **API / kontrak** | `tests/integration/api_test.go` | Server penuh dengan pipeline biometrik **stub deterministik**. Flow sesi lengkap, kode error, bentuk JSON. | idem |
-| **Adversarial** | `tests/integration/attack_test.go` | Print attack, replay video, frame duplikat, seq mundur, identitas berganti di tengah sesi — semua **harus** ditolak. | idem |
-| **Benchmark** | `*_bench_test.go` | Latensi per tahap inference, throughput 1:N pada 10k embedding. | `go test -bench=. -benchmem ./...` |
+| **Golden** | `internal/biometric/onnx/testdata/golden/` (tag `models`) | Output detector/landmarker/embedder terhadap adegan yang dibangkitkan secara deterministik. Mendeteksi regresi diam-diam saat ganti versi model. | `go test -tags=models ./internal/biometric/onnx/...` |
+| **Integrasi** | `tests/integration/` (tag `integration`) | Postgres dan MinIO asli dari stack compose. Migrasi naik-turun-naik, atomisitas audit, token sekali pakai. Kriteria B diukur di sini, bukan di benchmark: 10.000 embedding, p95 pencarian, dan recall@1 HNSW dibandingkan brute force. | `go test -tags=integration ./tests/integration/...` |
+| **Serangan** | `tests/attack/` — **tanpa build tag** | Sepuluh serangan lewat router HTTP sungguhan dengan pipeline stub: replay urutan, urutan mundur, gambar diam ditahan, nonce salah pada tiga endpoint, sesi diselesaikan lebih awal, sesi kedaluwarsa, tanpa API key, urutan challenge yang bisa ditebak, dan penolakan yang membocorkan pertahanan mana yang bekerja. Plus satu yang membuktikan subjek jujur yang diam sebentar **tidak** ditolak. | `go test ./tests/attack/...` |
+| **Benchmark** | `cmd/bench/` (perintah, bukan `go test -bench`) | Latensi per tahap inference terhadap model asli. Ditulis sebagai perintah karena ia butuh berkas `.onnx` dan gambar sungguhan — dua hal yang menurut aturan 1 di bawah tidak boleh dituntut oleh `go test ./...`. | `go run ./cmd/bench -synthetic 60 -full` |
 
 **Target coverage:**
 
@@ -403,11 +536,16 @@ func (s *Service) SubmitFrame(ctx context.Context, sessionID SessionID, f Frame)
 - Keseluruhan repo: **≥ 70%**
 - `internal/biometric/onnx/`: dikecualikan dari target coverage (butuh model asli); dijaga oleh golden test.
 
+> Per 0.3 **kedua target pertama belum terpenuhi**: `internal/enrollment` di
+> 78,0% dan repo di 55,8%. Angkanya tidak diturunkan agar cocok dengan hasil —
+> itu akan menghapus satu-satunya alasan angka itu ada. Rincian dan pertanyaan
+> yang menyertainya ("keseluruhan repo" itu penyebutnya apa?) di §9 X2.
+
 **Aturan test:**
 
 1. Semua test **harus** bisa jalan tanpa file model `.onnx` kecuali yang bertag `models`. Stub pipeline adalah default.
 2. Test **tidak boleh** menyentuh jaringan luar. Model dan container di-pin dan lokal.
-3. **Tidak ada foto wajah orang asli** di `testdata/`. Gunakan wajah sintetis atau dataset berlisensi CC0/publik. Ini bukan preferensi — ini batas hukum data biometrik.
+3. **Tidak ada foto wajah orang asli** di `testdata/` mana pun. Ini bukan preferensi — ini batas hukum data biometrik. Sampai 0.3 aturan ini dipatuhi dengan cara yang lebih kuat dari yang diminta: repo tidak memuat satu pun gambar wajah, sungguhan maupun sintetis. Adegan uji dibangkitkan oleh kode saat test berjalan, dan golden file menyimpan **angkanya**, bukan gambarnya.
 4. Bug fix mengikuti pola *Prove-It*: tulis test yang gagal dan mereproduksi bug **dulu**, baru perbaiki.
 5. `go test -race` harus bersih. Data race pada pool ONNX session adalah kegagalan build.
 
@@ -432,7 +570,7 @@ func (s *Service) SubmitFrame(ctx context.Context, sessionID SessionID, f Frame)
 - Mengubah skema database setelah migrasi pertama di-commit.
 - Mengubah bentuk request/response API yang sudah ada (breaking change kontrak).
 - Mengganti model ONNX atau versinya — mengubah distribusi skor sehingga semua threshold perlu dikalibrasi ulang.
-- Menambah container ke `docker-compose.yml`.
+- Menambah container ke `compose.yaml`.
 - Menurunkan threshold keamanan mana pun agar sebuah test lolos.
 - Menambah eksekusi ONNX di GPU (CUDA/DirectML) — mengubah base image dan matriks build secara signifikan.
 - Melewatkan atau menonaktifkan verifikasi liveness pada jalur enrollment.
@@ -460,35 +598,59 @@ Selesai berarti **semua** poin berikut dapat diverifikasi:
 | # | Kriteria | Cara verifikasi |
 |---|---|---|
 | A1 | `docker compose up -d --build` menghidupkan seluruh service dalam keadaan healthy, < 5 menit dari cache kosong. | `docker compose ps` menunjukkan semua `healthy`. |
-| A2 | `GET /readyz` mengembalikan 200 dengan status DB, MinIO, dan 4 model ter-load. | `curl -s localhost:8080/readyz \| jq` |
-| A3 | Demo di `http://localhost:8080/demo` menuntaskan sesi 3-challenge memakai webcam, verdict muncul < 2 detik setelah frame terakhir. | Uji manual, direkam di README. |
+| A2 | `GET /readyz` mengembalikan 200; **503** bila database, skema, atau object store tidak siap. Model dimuat saat boot dan gagal di sana, bukan di readiness — proses yang modelnya tidak ada tidak pernah sampai menerima probe. | ✅ **lolos** — diverifikasi dengan mematikan Postgres: `/readyz` 503 sementara `/healthz` tetap 200 |
+| A3 | Demo di `http://localhost:8080/demo` menuntaskan sesi 3-challenge memakai webcam, verdict muncul < 2 detik setelah frame terakhir. | ⚠ **sebagian.** Demo berjalan dengan webcam sungguhan dan menemukan empat cacat yang lolos dari seluruh test yang ada: frame diturunkan ke 480 px sehingga wajah 105 px ditolak ambang 112 px; ambang kedip mutlak yang tidak pernah dicapai siapa pun; anti-spoof menolak 100% subjek asli; dan model pose yang nyaris sebidang. Keempatnya diperbaiki. Yang **belum** diukur adalah bagian "< 2 detik" — tidak ada instrumentasi yang mencatatnya di klien. |
 | A4a | Frame biasa (tanpa embedder) **p95 < 150 ms**. Terukur **149,1 ms** di input 320. | `bench -full -size 320` |
 | A4b | Frame kunci (dengan embedder) **p95 < 900 ms**. Terukur **796,4 ms**. Anggaran terpisah karena frame kunci muncul beberapa kali per sesi, bukan enam kali per detik. | `bench -full -size 320` |
-| A5 | Print attack (foto dicetak / ditampilkan di layar HP) ditolak. | `attack_test.go` + uji manual. |
-| A6 | Replay attack (video rekaman orang yang sama) gagal karena urutan challenge acak. | `attack_test.go` |
-| A7 | Frame duplikat, `seq` mundur, dan pergantian identitas di tengah sesi ditolak dengan kode error yang tepat. | `attack_test.go` |
-| A8 | Sesi kedaluwarsa otomatis pada 90 detik; sesi kedaluwarsa dibersihkan dari DB. | Uji integrasi dengan fake clock. |
+| A5 | Print attack (foto dicetak / ditampilkan di layar HP) ditolak. | 🚫 **TIDAK TERPENUHI, dan tidak akan terpenuhi tanpa kalibrasi.** Konversi MiniFASNetV2 yang ada memberi skor ~0,006 pada wajah sungguhan — dengan penegakan menyala ia menolak **setiap** subjek asli, jadi `LV_LIVENESS_ANTISPOOF_ENFORCE` default `false` dan foto cetak lolos. Skornya tetap diukur dan dicatat. Konversinya terbukti setia pada PyTorch (`tools/antispoof/probe.py`, logit demi logit), jadi yang kurang adalah kalibrasi, bukan kode. Terhubung ke Open Question #2 dan #3. |
+| A6 | Replay attack (video rekaman orang yang sama) gagal karena urutan challenge acak. | ✅ `TestChallengeOrderIsNotFixedAcrossSessions` + `TestAStillImageHeldTooLongEndsTheSession` |
+| A7 | Frame duplikat, `seq` mundur, dan pergantian identitas di tengah sesi ditolak dengan kode error yang tepat. | ✅ `tests/attack/` — dan `TestHoldingStillBrieflyIsNotAnAttack` membuktikan pertahanannya tidak menelan subjek jujur |
+| A8 | Sesi kedaluwarsa otomatis pada 90 detik; sesi kedaluwarsa dibersihkan dari DB. | ✅ `TestAnExpiredSessionCannotBeUsed` + uji integrasi dengan jam palsu |
 
 ### Milestone B — Enrollment & 1:N
 
 | # | Kriteria | Cara verifikasi |
 |---|---|---|
-| B1 | Enrollment **menolak** request tanpa `liveness_token` yang valid dan belum terpakai. | `api_test.go` |
-| B2 | 1:N search pada galeri 10.000 embedding: **p95 < 50 ms** dengan index HNSW. | Uji integrasi dengan embedding sintetis. |
-| B3 | Recall@1 index HNSW ≥ 0.98 dibanding brute force exact search pada dataset yang sama. | Uji integrasi. |
-| B4 | `DELETE /v1/faces/{id}` menghapus embedding **dan** objek MinIO, serta menyisakan baris audit. | Uji integrasi. |
-| B5 | Setiap keputusan verifikasi menghasilkan baris audit yang dapat ditelusuri lengkap dengan skor dan referensi artefak. | Uji integrasi. |
+| B1 | Enrollment **menolak** request tanpa `liveness_token` yang valid dan belum terpakai. | ✅ `TestEnrollNeedsAValidToken`, `TestTokenIsRedeemedOnceAndOnlyOnce`, dan `TestAFailedEnrollmentStillSpendsTheToken` — yang terakhir menutup celah menggilir token yang sama sampai satu percobaan berhasil |
+| B2 | 1:N search pada galeri 10.000 embedding: **p95 < 50 ms** dengan index HNSW. | ✅ **lolos dengan margin** — terukur **6,4 ms** p95 di `tests/integration/face_gallery_test.go` |
+| B3 | Recall@1 index HNSW ≥ 0.98 dibanding brute force exact search pada dataset yang sama. | ✅ terukur **1,000** pada galeri dan probe yang sama |
+| B4 | `DELETE /v1/faces` menghapus embedding **dan** objek MinIO, serta menyisakan baris audit. | ✅ uji integrasi. `subject_id` di body, bukan di path — lihat tabel ratifikasi §11 |
+| B5 | Setiap keputusan verifikasi menghasilkan baris audit yang dapat ditelusuri lengkap dengan skor dan referensi artefak. | ✅ ditegakkan oleh tipe, bukan oleh disiplin: `Repository.Insert(ctx, Face, AuditEntry)` menerima keduanya dalam satu transaksi, jadi menyimpan embedding tanpa audit bukan sesuatu yang bisa dipanggil |
 
 ### Lintas milestone
 
 | # | Kriteria | Cara verifikasi |
 |---|---|---|
-| X1 | `go test ./... -race` lolos bersih. | CI + lokal. |
-| X2 | Coverage domain ≥ 80%, repo ≥ 70%. | `go tool cover -func` |
-| X3 | `golangci-lint run ./...` nol issue. | CI + lokal. |
-| X4 | Test khusus membuktikan tidak ada gambar/embedding yang bocor ke log. | Test yang menangkap output `slog` dan memindainya. |
-| X5 | Migrasi `up` lalu `down` lalu `up` kembali berhasil pada database kosong. | Uji integrasi. |
-| X6 | README memungkinkan orang lain menjalankan project ini dari nol dalam < 10 menit. | Uji ulang di mesin bersih. |
+| X1 | `go test ./... -race` lolos bersih. | ✅ **lolos** — 2026-08-10, seluruh paket, nol data race |
+| X2 | Coverage domain ≥ 80%, repo ≥ 70%. | ⚠ **BELUM TERPENUHI pada dua hitungan.** Lihat kotak di bawah tabel. |
+| X3 | `golangci-lint run ./...` nol issue. | ✅ **lolos** — 2026-08-10, nol keluaran |
+| X4 | Test khusus membuktikan tidak ada gambar/embedding yang bocor ke log. | ✅ `internal/httpapi/logleak_test.go` — menangkap keluaran `slog` dan memindainya |
+| X5 | Migrasi `up` lalu `down` lalu `up` kembali berhasil pada database kosong. | ✅ `tests/integration/postgres_test.go` |
+| X6 | README memungkinkan orang lain menjalankan project ini dari nol dalam < 10 menit. | ⚠ **belum diuji ulang di mesin bersih.** README ada dan lengkap, tapi klaimnya belum pernah dibuktikan oleh siapa pun selain penulisnya. |
+
+> #### X2 — angka sebenarnya, per 2026-08-10
+>
+> | Ukuran | Target | Terukur | |
+> |---|---|---|---|
+> | `internal/enrollment` | ≥ 80% | **78,0%** | ⚠ kurang dua poin |
+> | `internal/liveness` | ≥ 80% | 89,8% | ✅ |
+> | `internal/biometric` | ≥ 80% | 94,3% | ✅ |
+> | Keseluruhan repo | ≥ 70% | **55,8%** | ⚠ kurang empat belas poin |
+>
+> Kekurangan kedua lebih besar dari yang terlihat, dan penyebabnya bukan kode
+> yang tidak diuji. `internal/storage/*` dan `cmd/*` menyumbang nol ke profil
+> ini: adapter storage diuji oleh `tests/integration/` yang butuh Postgres dan
+> MinIO hidup dan tidak ikut terhitung, sementara `cmd/*` adalah entrypoint yang
+> memang tidak punya test. Keluarkan keduanya dan angkanya jadi **88,0%**;
+> keluarkan `cmd/` dan `biometric/onnx/` saja — dua yang sudah §7 kecualikan —
+> dan jadi **74,8%**, di atas target.
+>
+> Itu **bukan** izin untuk menulis 74,8% lalu menyatakan lolos. Yang sebenarnya
+> terjadi adalah §7 menetapkan "keseluruhan repo" tanpa pernah menyebut apa yang
+> ada di dalam kata itu, dan penyebut yang tidak pernah didefinisikan bisa
+> digeser sampai kriteria mana pun lolos. Angka literalnya 55,8%. Memilih
+> penyebut yang benar adalah keputusan Anda, bukan sesuatu yang boleh dipungut
+> di sini sambil lalu.
 
 ---
 
@@ -500,13 +662,13 @@ Perlu jawaban Anda — beberapa memblokir kalibrasi, sisanya bisa diputuskan sam
 
 2. **Target FAR/FRR.** Berapa target False Accept Rate dan False Reject Rate? Tanpa angka, threshold di §5 hanyalah tebakan berdasar literatur. Standar industri eKYC: FAR ≤ 0.01%, FRR ≤ 5%. — *Memblokir kalibrasi threshold.*
 
-3. **Dataset kalibrasi.** Akan pakai apa untuk mengukur? CelebA-Spoof / CASIA-SURF / rekaman sendiri? Perlu diputuskan sebelum Milestone A8. — *Memblokir A5/A6.*
+3. **Dataset kalibrasi.** Akan pakai apa untuk mengukur? CelebA-Spoof / CASIA-SURF / rekaman sendiri? — *Memblokir A5, yang saat ini **gagal**.* Tanpa data berlabel, ambang anti-spoof tidak bisa dipindahkan dari 0,80 dengan alasan apa pun selain tebakan, dan `cmd/calibrate` — yang sudah dibangun dan diuji — tidak punya apa-apa untuk disapu.
 
 4. **Retensi data.** Berapa lama artefak frame dan baris audit disimpan? Perlukah job pembersihan otomatis? UU PDP Indonesia mensyaratkan batas retensi eksplisit untuk data biometrik.
 
 5. **Skala galeri.** Berapa perkiraan jumlah subject terdaftar? 10k dan 10 juta membutuhkan strategi index yang berbeda secara fundamental (HNSW in-memory vs sharding).
 
-6. **Streaming frame.** Spec ini memakai HTTP POST per frame (~5–8 fps). WebSocket akan lebih halus dan hemat overhead. Cukupkah HTTP untuk v1? — *Rekomendasi saya: ya, HTTP dulu; WebSocket masuk backlog.*
+6. ~~**Streaming frame.**~~ ✅ **TERJAWAB dengan dibangun (2026-08-08):** HTTP POST per frame, ~6 fps. Anggaran terukur 149 ms per frame membuat laju itu pas; lebih cepat hanya menumpuk antrean. WebSocket tetap di backlog dan tidak mengubah kontrak mana pun kalau ditambahkan nanti.
 
 7. **Otentikasi.** Static API key sudah cukup untuk pemakaian lokal? Atau perlu langsung OIDC/mTLS?
 
@@ -522,3 +684,40 @@ Perlu jawaban Anda — beberapa memblokir kalibrasi, sisanya bisa diputuskan sam
 |---|---|---|
 | 0.1 | 2026-08-06 | Draft awal. Scope: active liveness + enrollment/1:N, Go + ONNX Runtime, REST + demo UI, Postgres/pgvector + MinIO. |
 | 0.2 | 2026-08-07 | **Spec di-approve.** Open question #8 ditutup: kode Inggris, dokumen Indonesia. Contoh di §6 ditulis ulang. Lanjut ke Phase 2 (Plan). |
+| 0.3 | 2026-08-10 | **Spec dikejar agar menyusul implementasi.** Dua belas penyimpangan diratifikasi, semuanya keputusan yang sudah diambil di kode dengan alasannya di commit tapi tidak pernah dibawa kembali ke sini — §8 mensyaratkan urutan sebaliknya, dan itu berulang kali dilanggar. Tiga kriteria §9 dicatat **gagal** tanpa targetnya diturunkan. Rinciannya di bawah. |
+
+### Yang diratifikasi di 0.3, dan mengapa
+
+| Spec 0.1–0.2 menjanjikan | Yang dibangun | Alasan |
+|---|---|---|
+| `liveness_token` berupa **JWT** | token acak 256 bit, disimpan sebagai HMAC | Tanda tangan tidak bisa membuktikan token belum dipakai; sekali-pakai menuntut state, dan begitu state ada tanda tangan tidak menambah apa pun |
+| `DELETE /v1/faces/{subject_id}` | `subject_id` di **body** | Path mendarat di log akses, log proxy, dan riwayat peramban — dan `subject_id` lazimnya nomor identitas |
+| EAR kedip mutlak `< 0.21` | rasio terhadap bukaan mata subjek sendiri | Nol dari 34 frame pernah mencapai ambang lama; challenge-nya mustahil, bukan sulit |
+| Yaw `> 25°` | **15°** | Subjek yang jelas menoleh hanya menghasilkan 22° |
+| Challenge kehabisan waktu → sesi gagal | **diulang**, maksimal 2× per sesi | Telat satu langkah membuang setiap langkah yang sudah lolos |
+| `/readyz` melaporkan "4 model ter-load" | database, versi skema, object store | Model dimuat saat boot; proses yang gagal memuatnya tidak pernah sampai menerima probe |
+| `testify` + `testcontainers-go` | `testing` stdlib, stack compose | Satu dependensi lebih sedikit di jalur data biometrik; testcontainers menuntut socket Docker yang tidak dibutuhkan |
+| `/v1/faces/verify`, `GET /v1/faces/{id}` | **tidak dibangun** | Spec sendiri menandai yang pertama opsional; yang kedua tidak dipakai jalur mana pun |
+| 4 migrasi | **6** | `retries`, `liveness_tokens`, `face_audit` |
+| PnP penuh untuk head pose | **perspektif-lemah** (ortografik berskala) | Solusi penuh menuntut focal length; webcam tidak melaporkannya, dan menebaknya memasukkan galat yang lebih besar dari yang dihilangkan |
+| Benchmark sebagai `*_bench_test.go` | perintah `cmd/bench` | Benchmark butuh berkas `.onnx` dan gambar sungguhan — dua hal yang aturan 1 di §7 melarang `go test ./...` menuntutnya |
+| `testdata/` berisi wajah sintetis | **tidak ada gambar wajah sama sekali** | Adegan dibangkitkan kode saat test jalan; golden file menyimpan angka, bukan gambar. Lebih ketat dari yang diminta, jadi dibiarkan |
+
+Ditambah dua hal yang tidak ada di spec mana pun dan sekarang ada: perintah
+`-migrate` pada server (`postgres.Migrate` sudah ada sejak T14 tapi **tidak
+pernah dipanggil siapa pun**), dan `internal/calibrate` beserta `cmd/calibrate`
+— harness ambang yang siap dijalankan begitu Open Question #2 dan #3 terjawab.
+
+### Yang TIDAK diratifikasi — dan sengaja dibiarkan merah
+
+Tiga kriteria di §9 gagal, dan tidak satu pun diperbaiki dengan cara menurunkan
+targetnya. Menuliskannya di sini supaya tidak hilang di antara yang hijau:
+
+- **A5 — print attack tidak ditolak.** Anti-spoof pasif mati secara default
+  karena dengan menyala ia menolak setiap subjek asli. Server memperingatkan di
+  tiap boot. Butuh kalibrasi (Open Question #2, #3), bukan kode.
+- **X2 — coverage.** `internal/enrollment` 78,0%; repo 55,8%. Yang kedua
+  membuka pertanyaan yang §7 tidak pernah jawab: "keseluruhan repo" itu
+  penyebutnya apa.
+- **X6 — README belum diuji di mesin bersih.** Satu-satunya orang yang pernah
+  membuktikan README-nya bekerja adalah yang menulisnya, dan itu bukan bukti.

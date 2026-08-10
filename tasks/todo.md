@@ -36,15 +36,15 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | T14 Postgres + migrasi | ✅ selesai | ✅ **lolos** — migrasi naik/turun/naik di Postgres sungguhan |
 | T15 session repository | ✅ selesai | ✅ **lolos** — round-trip, optimistic lock, purge |
 | T20 handler HTTP | ✅ selesai | ✅ **lolos** — cakupan 83,7% |
-| T21 demo web UI | ✅ selesai | ⚠ **belum diverifikasi dengan webcam** — lihat Checkpoint A |
-| **Checkpoint 4** | — | ⚠ **SEBAGIAN** — A1/A4 lolos, A2/A3/A5/A6 belum |
+| T21 demo web UI | ✅ selesai | ✅ **diverifikasi dengan webcam** — dan menemukan empat cacat yang lolos dari seluruh test yang ada |
+| **Checkpoint 4** | — | ⚠ **SEBAGIAN** — A1/A2/A4/A6/A7/A8 lolos, A3 sebagian, **A5 gagal** (lihat §9 SPEC) |
 | T22 skema pgvector + HNSW | ✅ selesai | ✅ **lolos** — 10.000 wajah, p95 6,4 ms, recall@1 1,000 |
 | T23 object store MinIO | ✅ selesai | ✅ **lolos** — round-trip, kunci tanpa data pribadi |
 | T24 liveness token | ✅ selesai | ✅ **lolos** — 8 goroutine berlomba, tepat 1 menang |
 | T25 enrollment.Service | ✅ selesai | ✅ **lolos** — pengikatan identitas terbukti menangkap serangannya |
 | T26 handler HTTP faces | ✅ selesai | ✅ **lolos** — 401/403/422/404 terverifikasi hidup |
 | T27 audit log | ✅ selesai | ✅ **lolos** — insert dibatalkan saat audit gagal |
-| **Checkpoint B** | — | ⚠ **SEBAGIAN** — kriteria pencarian lolos; end-to-end dengan wajah sungguhan menunggu webcam |
+| **Checkpoint B** | — | ✅ **LOLOS** — B1–B5 semua terverifikasi; pencarian lolos dengan margin (6,4 ms vs batas 50 ms) |
 | T28 suite regresi serangan | ⚠ sebagian | 10 serangan ditolak; foto cetak & replay layar diblokir Open Question #3 |
 | T29 observability + readyz | ✅ selesai | ✅ **lolos** — 503 saat Postgres mati, /healthz tetap 200 |
 | T30 harness kalibrasi | ⚠ dibangun, belum dijalankan | Alatnya siap; datanya diblokir Open Question #2 dan #3 |
