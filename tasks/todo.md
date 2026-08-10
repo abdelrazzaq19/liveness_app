@@ -53,8 +53,8 @@ Semua perintah dijalankan dari root project. `dev` merujuk ke service dev di `co
 | **Checkpoint B** | — | ⚠ **SEBAGIAN** — kriteria pencarian lolos; end-to-end dengan wajah sungguhan menunggu webcam |
 | T28 suite regresi serangan | ⚠ sebagian | 10 serangan ditolak; foto cetak & replay layar diblokir Open Question #3 |
 | T29 observability + readyz | ✅ selesai | ✅ **lolos** — 503 saat Postgres mati, /healthz tetap 200 |
-| T30 harness kalibrasi | ⛔ diblokir | Open Question #2 dan #3 |
-| T31 README + verifikasi akhir | ⬜ berikutnya | — |
+| T30 harness kalibrasi | ⚠ dibangun, belum dijalankan | Alatnya siap; datanya diblokir Open Question #2 dan #3 |
+| T31 README + verifikasi akhir | ✅ selesai | ✅ **lolos** — 2026-08-10, rinciannya di README |
 
 ### Yang belum terlindungi, dan kenapa
 
